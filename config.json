@@ -1,0 +1,20 @@
+{
+  "_comment": "AI Maze 项目统一参数配置（由角色4评测负责人维护）",
+  "local": {
+    "coin_value": 50,
+    "trap_penalty": 30,
+    "w_coin": 1.0,
+    "w_trap": 1.0,
+    "w_dist": 0.5
+  },
+  "global": {
+    "w_coin": 2.0,
+    "w_trap": 1.5,
+    "base_cost": 1.0,
+    "rush_round_threshold": 5
+  },
+  "sim": {
+    "max_rounds": 500,
+    "view_radius": 1
+  }
+}
