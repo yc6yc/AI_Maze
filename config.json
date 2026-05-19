@@ -11,7 +11,7 @@
     "w_coin": 2.0,
     "w_trap": 1.5,
     "base_cost": 1.0,
-    "rush_round_threshold": 5,
+    "rush_round_threshold": 50,
     "retry_buffer": 3,
     "min_explore_ratio": 0.4
   },
