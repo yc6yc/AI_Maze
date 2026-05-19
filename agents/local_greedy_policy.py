@@ -36,6 +36,7 @@ DEFAULT_CONFIG = {
     "w_coin": 1.0,
     "w_trap": 1.0,
     "w_dist": 0.5,
+    "w_backtrack": 2.0,     # 回退到上一步位置的额外惩罚系数
 }
 
 
@@ -51,6 +52,7 @@ class LocalGreedyAgent(BaseAgent):
         super().__init__(name="LocalGreedyAgent")
         self.cfg = {**DEFAULT_CONFIG, **(config or {})}
         self.fallback_agent = fallback_agent
+        self._prev_pos: Optional[Tuple[int, int]] = None   # 上一步所在位置
 
     # ------------------------------------------------------------------ #
     # 主接口
@@ -70,9 +72,11 @@ class LocalGreedyAgent(BaseAgent):
                 # 找到本回合应走的第一步
                 first_step = self._first_step(r, c, best_pos, maze)
                 if first_step is not None:
+                    self._prev_pos = (r, c)   # 记录本步出发位置
                     return Action(move=_pos_to_move(r, c, first_step))
 
         # 无局部收益 -> 交给 fallback
+        self._prev_pos = (r, c)
         if self.fallback_agent is not None:
             return self.fallback_agent.decide(ctx)
         return Action(move="STAY")
@@ -116,20 +120,25 @@ class LocalGreedyAgent(BaseAgent):
         dist: int,
         maze: MazeState,
     ) -> float:
-        """计算单个格子的性价比"""
+        """计算单个格子的性价比，对回退到上一步位置的格子施加额外惩罚"""
         cfg = self.cfg
         coin_v = 0.0
         trap_v = 0.0
+        backtrack_v = 0.0
 
         if cell in (CELL_COIN, CELL_GOLD):
             coin_v = cfg["coin_value"]
         if cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
             trap_v = cfg["trap_penalty"]
+        # 回退惩罚：若该格子正是上一步出发的位置（即原路返回），额外扣分
+        if self._prev_pos is not None and (r, c) == self._prev_pos:
+            backtrack_v = cfg["w_backtrack"]
 
         score = (
             coin_v * cfg["w_coin"]
             - trap_v * cfg["w_trap"]
-            - dist  * cfg["w_dist"]   # dist=1（直接邻居）或 2（对角邻居）
+            - dist   * cfg["w_dist"]       # dist=1（直接邻居）或 2（对角邻居）
+            - backtrack_v                  # 回退到上一步位置的额外惩罚
         )
         return score
 
