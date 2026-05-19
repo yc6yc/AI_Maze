@@ -21,7 +21,12 @@ class CompositeAgent(BaseAgent):
     def __init__(self, config: dict = None):
         super().__init__(name="CompositeAgent")
         cfg = config or {}
-        self.global_planner = GlobalPlannerAgent(config=cfg.get("global", {}))
+        global_cfg = {
+            **cfg.get("global", {}),
+            # 把 sim.max_rounds 传给全局规划器，用于计算剩余步数压力
+            "max_rounds": cfg.get("sim", {}).get("max_rounds", 500),
+        }
+        self.global_planner = GlobalPlannerAgent(config=global_cfg)
         self.local_greedy   = LocalGreedyAgent(
             config=cfg.get("local", {}),
             fallback_agent=self.global_planner,

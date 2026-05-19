@@ -18,6 +18,11 @@ from core.state import GameContext, Action, CELL_BOSS
 class CombatAgent:
     """
     无状态战斗决策辅助类（不继承 BaseAgent，作为组件嵌入其他 Agent）。
+
+    minRounds 语义说明：
+      服务器下发的 minRounds 是 BOSS 战中的最大攻击轮数上限。
+      每个战斗回合玩家可使用一个技能（BOSS 不反击）。
+      超出 minRounds 轮未击败 BOSS → 挑战失败，扣除 CoinConsumption 金币。
     """
 
     def should_fight(self, ctx: GameContext) -> bool:
@@ -30,6 +35,39 @@ class CombatAgent:
             if maze.get(nr, nc) == CELL_BOSS:
                 return True
         return False
+
+    def can_defeat_in_time(self, ctx: GameContext, boss_hp: int) -> bool:
+        """
+        预判能否在 minRounds 轮内击败 BOSS。
+
+        策略：贪心模拟 minRounds 轮的最优技能使用序列，
+        计算累计最大伤害，若 >= boss_hp 则可在时限内击败。
+
+        参数：
+          boss_hp  : 当前 BOSS 血量（失败后服务器会告知已扣减的血量）
+        返回：
+          True  → 按最优序列可在 minRounds 内击败
+          False → 打不死，此次挑战必然失败，需提前准备重试金币
+        """
+        min_rounds = ctx.min_rounds
+        skills = [s for s in ctx.player.skills]  # 复制，避免修改原始状态
+        # 模拟冷却
+        cds = [s.remaining_cd for s in skills]
+        total_damage = 0
+        for round_i in range(min_rounds):
+            # 找本轮可用（cd==0）且伤害最大的技能
+            best_dmg, best_idx = 0, -1
+            for i, s in enumerate(skills):
+                if cds[i] == 0 and s.damage > best_dmg:
+                    best_dmg, best_idx = s.damage, i
+            if best_idx >= 0:
+                total_damage += best_dmg
+                cds[best_idx] = skills[best_idx].cooldown  # 进入冷却
+            # 冷却递减
+            cds = [max(0, cd - 1) for cd in cds]
+            if total_damage >= boss_hp:
+                return True
+        return total_damage >= boss_hp
 
     def decide_combat(self, ctx: GameContext) -> Action:
         """

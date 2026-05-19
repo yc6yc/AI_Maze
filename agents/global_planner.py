@@ -24,7 +24,13 @@ global_planner.py — 全局迷宫探索与路径规划（重构版）
 
 BOSS 战失败检测（AI 侧启发式）：
   - ctx.player.coins 骤降（降幅 ≈ CoinConsumption）且仍在 RUSH_TO_BOSS
-  - 或 round_num 超过 min_rounds 仍未切换到 RUSH_TO_EXIT
+  - 或走迷宫总步数接近 max_rounds 仍未切换到 RUSH_TO_EXIT
+
+minRounds 说明（来自服务器输入）：
+  minRounds 是 BOSS 战内部的最大攻击轮数，每轮使用一个技能攻击 BOSS（BOSS 不反击）。
+  若在 minRounds 轮内未击败 BOSS，则挑战失败，扣除 CoinConsumption 枚金币，
+  已击败部分 BOSS 的血量将对玩家可见，可继续重试。
+  minRounds 与走迷宫的步数（round_num）完全无关。
 """
 
 from __future__ import annotations
@@ -43,7 +49,7 @@ DEFAULT_CONFIG = {
     "w_trap": 1.5,
     "retry_buffer": 3,          # 预留 N 次重试所需金币（N × CoinConsumption）
     "min_explore_ratio": 0.4,   # 至少探索此比例格子才允许提前切到 RUSH_TO_BOSS
-    "rush_round_threshold": 8,  # 距 minRounds 剩余不足此值时强制冲 BOSS
+    "rush_round_threshold": 50, # 走迷宫总步数（round_num）距 max_rounds 不足此值时强制冲 BOSS
 }
 
 Pos = Tuple[int, int]
@@ -171,9 +177,11 @@ class GlobalPlannerAgent(BaseAgent):
                 self._path = []
             return
 
-        # 时间压力：距 minRounds 不足阈值，强制冲 BOSS
-        rounds_left = ctx.min_rounds - ctx.player.round_num
-        if rounds_left <= self.cfg["rush_round_threshold"] and self._known_boss_pos:
+        # 时间压力：走迷宫总步数接近 max_rounds 上限时，强制冲 BOSS
+        # 注意：min_rounds 是 BOSS 战的攻击轮数限制，与 round_num 无关
+        max_rounds = self.cfg.get("max_rounds", 500)
+        steps_left = max_rounds - ctx.player.round_num
+        if steps_left <= self.cfg["rush_round_threshold"] and self._known_boss_pos:
             if self.phase not in (Phase.RUSH_TO_BOSS,):
                 self.phase = Phase.RUSH_TO_BOSS
                 self._path = []
