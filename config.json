@@ -20,5 +20,9 @@
   "sim": {
     "max_rounds": 500,
     "view_radius": 1
+  },
+  "composite": {
+    "_comment": "stuck_threshold: 局部贪心连续返回 STAY 多少次后切换全局规划",
+    "stuck_threshold": 2
   }
 }

@@ -52,11 +52,10 @@ class LocalGreedyAgent(BaseAgent):
     选得分最高的方向走。
     """
 
-    def __init__(self, config: dict = None, fallback_agent=None):
+    def __init__(self, config: dict = None):
         super().__init__(name="LocalGreedyAgent")
         self.cfg = {**DEFAULT_CONFIG, **(config or {})}
-        self.fallback_agent = fallback_agent
-        self._prev_pos: Optional[Tuple[int, int]] = None   # 上一步所在位置
+        self._prev_pos = None   # 上一步所在位置
 
     # ------------------------------------------------------------------ #
     # 主接口
@@ -76,37 +75,11 @@ class LocalGreedyAgent(BaseAgent):
                 # 找到本回合应走的第一步
                 first_step = self._first_step(r, c, best_pos, maze)
                 if first_step is not None:
+                    self._prev_pos = (r, c)
                     return Action(move=_pos_to_move(r, c, first_step))
 
-        # 无局部收益 -> 交给 fallback
-        if self.fallback_agent is not None:
-            return self.fallback_agent.decide(ctx)
+        # 3×3 内无正收益 → 返回 STAY，由 CompositeAgent 切换全局规划
         return Action(move="STAY")
-
-        # ── 步骤二：对每个可走方向建子可达集并计分 ──────────────────────
-        best_dirs: List[str] = []
-        best_score = float("-inf")
-
-        for move, (nr, nc) in s_center.items():
-            # 直接邻居贡献（步数 = 1）
-            score = self._cell_value(nr, nc, maze, visited)
-
-            # 建方向 d 的子可达集 S_d：经由直接邻居可到达的对角格
-            for ddr, ddc in DIRECTION_MAP[move]["diagonals"]:
-                dnr, dnc = r + ddr, c + ddc
-                if (0 <= dnr < maze.rows and 0 <= dnc < maze.cols
-                        and maze.is_walkable(dnr, dnc)):
-                    # 对角邻居贡献（步数 = 2，除以 2 加入）
-                    score += self._cell_value(dnr, dnc, maze, visited) / 2
-
-            if score > best_score:
-                best_score = score
-                best_dirs = [move]
-            elif score == best_score:
-                best_dirs.append(move)
-
-        # 多个方向并列最高分时随机选一个
-        return Action(move=random.choice(best_dirs))
 
     # ------------------------------------------------------------------ #
     # 格子价值

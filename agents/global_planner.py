@@ -236,14 +236,15 @@ class GlobalPlannerAgent(BaseAgent):
             return
 
         if self.phase == Phase.EXPLORE:
-            goal = self._nearest_frontier(pos, maze)
-            if goal is None:
-                # 全图已探索，转收集
+            # EXPLORE 阶段：用 BFS 找最近的前沿格子（已知可行且有未知邻居）
+            # BFS 只在已知格子中扩展，天然适配 fog_map，不会走入 None 区域
+            path = self._bfs_to_frontier(pos, maze)
+            if path is None:
+                # 已知区域内无前沿，转收集
                 self.phase = Phase.COLLECT
                 self._replan(ctx)
                 return
-            # 探索时不考虑陷阱代价（探索优先于保安全）
-            self._path = self._plan_path(pos, goal, maze, avoid_traps=False)
+            self._path = path
             return
 
         if self.phase in (Phase.COLLECT, Phase.RETRY_COLLECT):
@@ -293,20 +294,39 @@ class GlobalPlannerAgent(BaseAgent):
         path = extract_path(prev, pos, goal)
         return path[1:] if path else []
 
+    def _bfs_to_frontier(self, pos: Pos, maze: MazeState) -> Optional[List[Pos]]:
+        """
+        BFS 在已知格子中扩展，找到最近的「前沿格子」（已知可行且有未知邻居）。
+
+        与普通寻路的关键区别：
+          - 只在 fog_map != None 的已知格子中行走（不尝试走进黑难区域）
+          - 终点条件是该格子有至少一个 fog_map==None 的邻居
+          - 直接返回完整路径，节省一步调用
+        """
+        from collections import deque
+        visited = {pos}
+        # 队列元素：(current_pos, path_so_far)
+        queue = deque([(pos, [])])
+
+        while queue:
+            cur, path = queue.popleft()
+            r, c = cur
+            # 检查该格子是否是前沿（有未知邻居）
+            for nr, nc in maze.neighbors(r, c):
+                if maze.fog_map[nr][nc] is None:
+                    return path  # 找到前沿，返回到达该前沿旁边的路径
+            # 向已知可行格子扩展
+            for nr, nc in maze.neighbors(r, c):
+                nxt = (nr, nc)
+                if nxt not in visited and maze.is_walkable(nr, nc):
+                    visited.add(nxt)
+                    queue.append((nxt, path + [nxt]))
+        return None  # 已知区域内无前沿（全图已探索）
+
     def _nearest_frontier(self, pos: Pos, maze: MazeState) -> Optional[Pos]:
-        """最近的前沿格子（已知可行 & 有未知邻居）"""
-        best: Optional[Tuple[float, Pos]] = None
-        for r in range(maze.rows):
-            for c in range(maze.cols):
-                if maze.fog_map[r][c] is None or not maze.is_walkable(r, c):
-                    continue
-                for nr, nc in maze.neighbors(r, c):
-                    if maze.fog_map[nr][nc] is None:
-                        dist = abs(r - pos[0]) + abs(c - pos[1])
-                        if best is None or dist < best[0]:
-                            best = (dist, (r, c))
-                        break
-        return best[1] if best else None
+        """保留兼容，返回前沿格子坐标（不含路径）"""
+        path = self._bfs_to_frontier(pos, maze)
+        return path[-1] if path else None
 
     def _best_coin_target(self, pos: Pos, maze: MazeState) -> Optional[Pos]:
         """性价比最高的金币格子：coin_value / (曼哈顿距离 + 1)"""
@@ -320,16 +340,6 @@ class GlobalPlannerAgent(BaseAgent):
                 if score > best_score:
                     best_score, best_pos = score, (r, c)
         return best_pos
-
-    def _custom_walkable(self, r: int, c: int, maze: MazeState) -> bool:
-        """仅用于需要硬性封路的场景（现已弹层，保留以备扩展）"""
-        if not maze.is_walkable(r, c):
-            return False
-        cell = maze.fog_map[r][c]
-        if cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
-            return False
-        return True
-
 
 def _pos_to_move(src: Pos, dst: Pos) -> str:
     dr = dst[0] - src[0]
