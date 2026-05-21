@@ -61,13 +61,7 @@ class LocalGreedyAgent(BaseAgent):
     def __init__(self, config: dict = None):
         super().__init__(name="LocalGreedyAgent")
         self.cfg = {**DEFAULT_CONFIG, **(config or {})}
-<<<<<<< HEAD
-        self.fallback_agent = fallback_agent
-        # 上一步决策后是否处于死路（除来路外无其他可走方向）
-        self.in_dead_end: bool = False
-=======
         self._prev_pos = None   # 上一步所在位置
->>>>>>> 7c0c5ce0f55f8918ff0fc94d4ad9e6c1ffec3757
 
     # ------------------------------------------------------------------ #
     # 主接口
@@ -87,22 +81,6 @@ class LocalGreedyAgent(BaseAgent):
                     and maze.is_walkable(nr, nc)):
                 s_center[move] = (nr, nc)
 
-<<<<<<< HEAD
-        if not s_center:
-            self.in_dead_end = True
-            if self.fallback_agent is not None:
-                return self.fallback_agent.decide(ctx)
-            return Action(move="STAY")
-
-        # ── 死路检测：可走方向只有一个，且那个格子是上一步来的位置 ──────
-        prev_pos: Tuple[int, int] | None = (
-            tuple(ctx.history[-1]["pos"]) if ctx.history else None
-        )
-        walkable_positions = set(s_center.values())
-        self.in_dead_end = (
-            len(s_center) == 1 and prev_pos in walkable_positions
-        )
-=======
         if candidates:
             # 按性价比降序，选最高分
             candidates.sort(key=lambda x: x[1], reverse=True)
@@ -117,7 +95,6 @@ class LocalGreedyAgent(BaseAgent):
 
         # 3×3 内无正收益 → 返回 STAY，由 CompositeAgent 切换全局规划
         return Action(move="STAY")
->>>>>>> 7c0c5ce0f55f8918ff0fc94d4ad9e6c1ffec3757
 
     # ------------------------------------------------------------------ #
     # 格子价值
