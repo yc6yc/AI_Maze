@@ -82,29 +82,85 @@ class LocalGreedyAgent(BaseAgent):
         return Action(move="STAY")
 
     # ------------------------------------------------------------------ #
-    # 格子价值
+    # 3×3 窗口评分（供 decide 和 CompositeAgent 调用）
     # ------------------------------------------------------------------ #
-    def _cell_value(
+    def _score_3x3(
         self,
         r: int,
         c: int,
         maze: MazeState,
-        visited: Set,
+    ) -> List[Tuple[Tuple[int, int], float]]:
+        """
+        扫描以 (r,c) 为中心的 3×3 窗口内所有可达邻居，
+        返回 [(pos, score), ...] 列表（仅包含可走格，不含中心格本身）。
+
+        距离定义：
+          - 上下左右直接邻居  dist=1
+          - 对角邻居          dist=2（需经由中转格才能到达）
+        """
+        results: List[Tuple[Tuple[int, int], float]] = []
+
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = r + dr, c + dc
+                if not (0 <= nr < maze.rows and 0 <= nc < maze.cols):
+                    continue
+                if not maze.is_walkable(nr, nc):
+                    continue
+
+                dist = abs(dr) + abs(dc)  # 1 或 2
+                # 对角格子（dist=2）需要至少一个中转格可走才能实际到达
+                if dist == 2:
+                    mid1 = (r, nc)   # 先横后竖的中转
+                    mid2 = (nr, c)   # 先竖后横的中转
+                    if not (maze.is_walkable(*mid1) or maze.is_walkable(*mid2)):
+                        continue
+
+                score = self._cell_score(nr, nc, maze, dist)
+                results.append(((nr, nc), score))
+
+        return results
+
+    # ------------------------------------------------------------------ #
+    # 单格评分
+    # ------------------------------------------------------------------ #
+    def _cell_score(
+        self,
+        r: int,
+        c: int,
+        maze: MazeState,
+        dist: int,
     ) -> float:
-        """计算单个格子的性价比"""
+        """
+        计算格子 (r,c) 的期望得分。
+
+        coin  → +coin_value * w_coin
+        trap  → -trap_penalty * w_trap（已触发的陷阱不重复扣）
+        dist  → -dist * w_dist（距离惩罚）
+        backtrack → -w_backtrack（上一步来的格子，避免原路折返）
+        """
         cfg = self.cfg
+        cell = maze.fog_map[r][c]
+
         coin_v = 0.0
         trap_v = 0.0
 
         if cell in (CELL_COIN, CELL_GOLD):
-            return cfg["coin_value"] * cfg["w_coin"]
-        if cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
+            coin_v = cfg["coin_value"]
+        elif cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
             trap_v = cfg["trap_penalty"]
 
+        backtrack_penalty = 0.0
+        if self._prev_pos is not None and (r, c) == self._prev_pos:
+            backtrack_penalty = cfg.get("w_backtrack", 2.0)
+
         score = (
-            coin_v * cfg["w_coin"]
-            - trap_v * cfg["w_trap"]
-            - dist  * cfg["w_dist"]   # dist=1（直接邻居）或 2（对角邻居）
+            coin_v  * cfg["w_coin"]
+            - trap_v  * cfg["w_trap"]
+            - dist    * cfg["w_dist"]
+            - backtrack_penalty
         )
         return score
 
