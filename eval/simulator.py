@@ -174,8 +174,12 @@ class LocalSimulator:
         # 4. 技能冷却
         player.tick_cooldowns()
 
+<<<<<<< HEAD
         # 5. 超时惩罚
         # 6. 记录快照
+=======
+        # 5. 记录快照（走迷宫无超时金币惩罚；超出 max_rounds 由 run() 的 while 条件终止）
+>>>>>>> fff2a946d0bc01715caf5fd2ebe1293a02fa5267
         ctx.history.append(ctx.snapshot())
 
     def _handle_boss(self, action: Action):

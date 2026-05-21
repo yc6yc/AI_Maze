@@ -5,7 +5,8 @@
     "trap_penalty": 30,
     "w_coin": 1.0,
     "w_trap": 1.0,
-    "w_dist": 0.5
+    "w_dist": 0.5,
+    "w_backtrack": 2.0
   },
   "global": {
     "w_coin": 2.0,
@@ -13,10 +14,15 @@
     "base_cost": 1.0,
     "rush_round_threshold": 50,
     "retry_buffer": 3,
-    "min_explore_ratio": 0.4
+    "min_explore_ratio": 0.4,
+    "trap_step_cost": 31
   },
   "sim": {
     "max_rounds": 500,
     "view_radius": 1
+  },
+  "composite": {
+    "_comment": "stuck_threshold: 局部贪心连续返回 STAY 多少次后切换全局规划",
+    "stuck_threshold": 2
   }
 }

@@ -2,37 +2,42 @@
 local_greedy_policy.py — 局部贪心拾取策略（完整 3×3 视野）
 负责人：角色2（算法A）
 ---------------------------------------------------------
-核心思路：
-  扫描当前位置的完整 3×3（9个格子）邻域内所有可见格子的性价比，
-  选出目标后，若目标是对角格子（需两步才能到达），则规划第一步中转。
+核心思路（对应 txt 策略文档）：
 
-格子分类：
-  - 直接邻居（上下左右，距离=1）：可直接走过去
-  - 对角邻居（左上/右上/左下/右下，距离=2）：不能直接走，
-    需找一个共同相邻的直接邻居作为中转格再走一步
+一、确认可达集
+  1. 从中心格出发，检查上下左右 4 个直接邻居是否可走，
+     可走的加入中心格的可达集 S_center。
+  2. 对 S_center 中的每个方向格 j，检查从 j 可到达的
+     对角邻居（仍在 3×3 视野内），可走的加入 j 的可达集 S_j。
+     S_j 是 S_center 的子集概念的延伸。
 
-性价比函数：
-  score(cell) = coin_value * w_coin        （金币收益）
-              - trap_penalty * w_trap       （陷阱风险）
-              - distance * w_dist           （距离代价，1或2）
+二、贪心选方向
+  对 S_center 中每个方向 d，计算方向得分：
+    score(d) = cell_value(直接邻居) / 1
+             + Σ cell_value(对角邻居) / 2  （对角邻居 ∈ S_d）
+
+  格子价值：金币=+coin_value，陷阱=-trap_penalty，
+           已访问空格=-visited_penalty，其余=0
+
+  选得分最高的方向走；多个并列则随机选一个。
 
 已触发陷阱记录在 maze.triggered_traps，不重复扣分。
 """
 
 from __future__ import annotations
-from typing import List, Tuple, Optional
+import random
+from typing import Dict, List, Set, Tuple
 
 from agents.base_agent import BaseAgent
 from core.state import (
     GameContext, Action, MazeState,
-    CELL_TRAP, CELL_COIN, CELL_GOLD, CELL_WALL,
+    CELL_TRAP, CELL_COIN, CELL_GOLD,
 )
-from core.pathfinding import bfs
 
-# 默认权重（由 config 注入后覆盖）
 DEFAULT_CONFIG = {
-    "coin_value": 50,       # G/C 的金币价值
-    "trap_penalty": 30,     # 陷阱触发扣分
+    "coin_value": 50,
+    "trap_penalty": 30,
+    "visited_penalty": 1,
     "w_coin": 1.0,
     "w_trap": 1.0,
     "w_dist": 0.5,
@@ -42,15 +47,15 @@ DEFAULT_CONFIG = {
 class LocalGreedyAgent(BaseAgent):
     """
     局部贪心拾取 Agent。
-    扫描完整 3×3（9格）视野，对直接邻居直接走，
-    对对角格子计算第一步中转格。
-    若 3×3 内无正收益目标，则委托全局规划。
+    先确定中心格可达集（哪些方向可走），
+    再对每个可走方向建其子可达集并计算累计得分，
+    选得分最高的方向走。
     """
 
-    def __init__(self, config: dict = None, fallback_agent=None):
+    def __init__(self, config: dict = None):
         super().__init__(name="LocalGreedyAgent")
         self.cfg = {**DEFAULT_CONFIG, **(config or {})}
-        self.fallback_agent = fallback_agent
+        self._prev_pos = None   # 上一步所在位置
 
     # ------------------------------------------------------------------ #
     # 主接口
@@ -70,51 +75,21 @@ class LocalGreedyAgent(BaseAgent):
                 # 找到本回合应走的第一步
                 first_step = self._first_step(r, c, best_pos, maze)
                 if first_step is not None:
+                    self._prev_pos = (r, c)
                     return Action(move=_pos_to_move(r, c, first_step))
 
-        # 无局部收益 -> 交给 fallback
-        if self.fallback_agent is not None:
-            return self.fallback_agent.decide(ctx)
+        # 3×3 内无正收益 → 返回 STAY，由 CompositeAgent 切换全局规划
         return Action(move="STAY")
 
     # ------------------------------------------------------------------ #
-    # 完整 3×3 扫描
+    # 格子价值
     # ------------------------------------------------------------------ #
-    def _score_3x3(
+    def _cell_value(
         self,
         r: int,
         c: int,
         maze: MazeState,
-    ) -> List[Tuple[Tuple[int, int], float]]:
-        """
-        扫描 3×3 内全部 8 个格子（不含中心自身），
-        对每个已知、可通行的格子计算性价比。
-        返回 [(目标坐标, 性价比分数), ...]
-        """
-        results = []
-        for dr in range(-1, 2):
-            for dc in range(-1, 2):
-                if dr == 0 and dc == 0:
-                    continue  # 跳过自身
-                nr, nc = r + dr, c + dc
-                if not (0 <= nr < maze.rows and 0 <= nc < maze.cols):
-                    continue
-                cell = maze.get(nr, nc)
-                if cell is None or cell == CELL_WALL:
-                    continue  # 未探索或墙壁跳过
-                if not maze.is_walkable(nr, nc):
-                    continue
-                dist = abs(dr) + abs(dc)   # 直接邻居=1，对角邻居=2
-                score = self._cell_score(nr, nc, cell, dist, maze)
-                results.append(((nr, nc), score))
-        return results
-
-    def _cell_score(
-        self,
-        r: int, c: int,
-        cell: str,
-        dist: int,
-        maze: MazeState,
+        visited: Set,
     ) -> float:
         """计算单个格子的性价比"""
         cfg = self.cfg
@@ -122,7 +97,7 @@ class LocalGreedyAgent(BaseAgent):
         trap_v = 0.0
 
         if cell in (CELL_COIN, CELL_GOLD):
-            coin_v = cfg["coin_value"]
+            return cfg["coin_value"] * cfg["w_coin"]
         if cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
             trap_v = cfg["trap_penalty"]
 
