@@ -24,8 +24,7 @@ local_greedy_policy.py — 局部贪心拾取策略（完整 3×3 视野）
 """
 
 from __future__ import annotations
-import random
-from typing import Dict, List, Set, Tuple
+from typing import List, Optional, Tuple
 
 from agents.base_agent import BaseAgent
 from core.state import (
@@ -42,12 +41,6 @@ DEFAULT_CONFIG = {
 }
 
 # 每个方向：直接邻居偏移 + 可经由该方向到达的两个对角邻居偏移
-DIRECTION_MAP: Dict[str, dict] = {
-    "UP":    {"direct": (-1,  0), "diagonals": [(-1, -1), (-1,  1)]},
-    "DOWN":  {"direct": ( 1,  0), "diagonals": [( 1, -1), ( 1,  1)]},
-    "LEFT":  {"direct": ( 0, -1), "diagonals": [(-1, -1), ( 1, -1)]},
-    "RIGHT": {"direct": ( 0,  1), "diagonals": [(-1,  1), ( 1,  1)]},
-}
 
 
 class LocalGreedyAgent(BaseAgent):
@@ -69,20 +62,11 @@ class LocalGreedyAgent(BaseAgent):
     def decide(self, ctx: GameContext) -> Action:
         r, c = ctx.player.pos
         maze = ctx.maze
-        visited: Set[Tuple] = {tuple(snap["pos"]) for snap in ctx.history}
 
-        # ── 步骤一：建中心格可达集 ──────────────────────────────────────
-        # S_center: move -> 直接邻居坐标（仅可走的方向）
-        s_center: Dict[str, Tuple[int, int]] = {}
-        for move, offsets in DIRECTION_MAP.items():
-            dr, dc = offsets["direct"]
-            nr, nc = r + dr, c + dc
-            if (0 <= nr < maze.rows and 0 <= nc < maze.cols
-                    and maze.is_walkable(nr, nc)):
-                s_center[move] = (nr, nc)
+        candidates = self._score_3x3(r, c, maze)
 
         if candidates:
-            # 按性价比降序，选最高分
+            # 按得分降序，选最高分
             candidates.sort(key=lambda x: x[1], reverse=True)
             for best_pos, best_score in candidates:
                 if best_score <= 0:
@@ -148,22 +132,35 @@ class LocalGreedyAgent(BaseAgent):
         maze: MazeState,
         dist: int,
     ) -> float:
-        """计算单个格子的性价比"""
+        """
+        计算格子 (r,c) 的期望得分。
+
+        coin      → +coin_value * w_coin
+        trap      → -trap_penalty * w_trap（已触发的陷阱不重复扣）
+        dist      → -dist * w_dist（距离惩罚，dist=1 直接邻居，dist=2 对角）
+        backtrack → -w_backtrack（上一步来的格子，避免原路折返）
+        """
         cfg = self.cfg
+        cell = maze.fog_map[r][c]   # None 表示未探索，按空格处理
+
         coin_v = 0.0
         trap_v = 0.0
 
         if cell in (CELL_COIN, CELL_GOLD):
-            return cfg["coin_value"] * cfg["w_coin"]
-        if cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
+            coin_v = cfg["coin_value"]
+        elif cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
             trap_v = cfg["trap_penalty"]
 
-        score = (
+        backtrack_penalty = 0.0
+        if self._prev_pos is not None and (r, c) == self._prev_pos:
+            backtrack_penalty = cfg.get("w_backtrack", 2.0)
+
+        return (
             coin_v * cfg["w_coin"]
-            - trap_v * cfg["w_trap"]
-            - dist  * cfg["w_dist"]   # dist=1（直接邻居）或 2（对角邻居）
+            - trap_v  * cfg["w_trap"]
+            - dist    * cfg["w_dist"]
+            - backtrack_penalty
         )
-        return score
 
     # ------------------------------------------------------------------ #
     # 对角格子的第一步中转逻辑
