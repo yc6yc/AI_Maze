@@ -97,21 +97,117 @@ class LocalGreedyAgent(BaseAgent):
         return Action(move="STAY")
 
     # ------------------------------------------------------------------ #
-    # 格子价值
+    # 3×3 窗口评分（供 decide 和 CompositeAgent 调用）
     # ------------------------------------------------------------------ #
-    def _cell_value(
+    def _score_3x3(
         self,
         r: int,
         c: int,
         maze: MazeState,
-        visited: Set,
+    ) -> List[Tuple[Tuple[int, int], float]]:
+        """
+        扫描以 (r,c) 为中心的 3×3 窗口内所有可达邻居，
+        返回 [(pos, score), ...] 列表（仅包含可走格，不含中心格本身）。
+
+        距离定义：
+          - 上下左右直接邻居  dist=1
+          - 对角邻居          dist=2（需经由中转格才能到达）
+        """
+        results: List[Tuple[Tuple[int, int], float]] = []
+
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = r + dr, c + dc
+                if not (0 <= nr < maze.rows and 0 <= nc < maze.cols):
+                    continue
+                if not maze.is_walkable(nr, nc):
+                    continue
+
+                dist = abs(dr) + abs(dc)  # 1 或 2
+                # 对角格子（dist=2）需要至少一个中转格可走才能实际到达
+                if dist == 2:
+                    mid1 = (r, nc)   # 先横后竖的中转
+                    mid2 = (nr, c)   # 先竖后横的中转
+                    if not (maze.is_walkable(*mid1) or maze.is_walkable(*mid2)):
+                        continue
+
+                score = self._cell_score(nr, nc, maze, dist)
+                results.append(((nr, nc), score))
+
+        return results
+
+    # ------------------------------------------------------------------ #
+    # 单格评分
+    # ------------------------------------------------------------------ #
+    def _cell_score(
+        self,
+        r: int,
+        c: int,
+        maze: MazeState,
+        dist: int,
     ) -> float:
+        """计算单个格子的性价比"""
         cfg = self.cfg
-        cell = maze.get(r, c)
+        coin_v = 0.0
+        trap_v = 0.0
+
         if cell in (CELL_COIN, CELL_GOLD):
             return cfg["coin_value"] * cfg["w_coin"]
         if cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
-            return -cfg["trap_penalty"] * cfg["w_trap"]
-        if (r, c) in visited:
-            return -cfg["visited_penalty"]
-        return 0.0
+            trap_v = cfg["trap_penalty"]
+
+        score = (
+            coin_v * cfg["w_coin"]
+            - trap_v * cfg["w_trap"]
+            - dist  * cfg["w_dist"]   # dist=1（直接邻居）或 2（对角邻居）
+        )
+        return score
+
+    # ------------------------------------------------------------------ #
+    # 对角格子的第一步中转逻辑
+    # ------------------------------------------------------------------ #
+    def _first_step(
+        self,
+        r: int, c: int,
+        target: Tuple[int, int],
+        maze: MazeState,
+    ) -> Optional[Tuple[int, int]]:
+        """
+        返回本回合应走的第一步坐标。
+
+        - 直接邻居（曼哈顿距离=1）：target 就是第一步
+        - 对角邻居（曼哈顿距离=2）：找一个同时相邻于 (r,c) 和 target
+          的可通行格子作为中转格，走向中转格
+        """
+        tr, tc = target
+        dist = abs(tr - r) + abs(tc - c)
+
+        if dist == 1:
+            # 直接邻居，直接走过去
+            return target
+
+        # 对角格子：候选中转格是两者的公共上下左右邻居
+        # 公共邻居只有两个：(r, tc) 和 (tr, c)
+        candidates = [(r, tc), (tr, c)]
+        for mid_r, mid_c in candidates:
+            if (0 <= mid_r < maze.rows and
+                    0 <= mid_c < maze.cols and
+                    maze.is_walkable(mid_r, mid_c)):
+                return (mid_r, mid_c)   # 走向中转格
+
+        return None   # 两个中转格都是墙，无法到达对角格子
+
+
+# --------------------------------------------------------------------------- #
+# 模块级工具函数
+# --------------------------------------------------------------------------- #
+def _pos_to_move(r: int, c: int, target: Tuple[int, int]) -> str:
+    dr = target[0] - r
+    dc = target[1] - c
+    if dr == -1: return "UP"
+    if dr ==  1: return "DOWN"
+    if dc == -1: return "LEFT"
+    if dc ==  1: return "RIGHT"
+    return "STAY"
