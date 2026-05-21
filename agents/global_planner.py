@@ -42,7 +42,7 @@ from core.state import (
     GameContext, Action, MazeState,
     CELL_TRAP, CELL_COIN, CELL_GOLD, CELL_BOSS,
 )
-from core.pathfinding import astar, bfs
+from core.pathfinding import astar, bfs, dijkstra, extract_path
 
 DEFAULT_CONFIG = {
     "w_coin": 2.0,
@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
     "retry_buffer": 3,          # 预留 N 次重试所需金币（N × CoinConsumption）
     "min_explore_ratio": 0.4,   # 至少探索此比例格子才允许提前切到 RUSH_TO_BOSS
     "rush_round_threshold": 50, # 走迷宫总步数（round_num）距 max_rounds 不足此值时强制冲 BOSS
+    "trap_step_cost": 31,       # Dijkstra 中陷阱格的额外代价（超过则绕路更划算）
 }
 
 Pos = Tuple[int, int]
@@ -219,8 +220,8 @@ class GlobalPlannerAgent(BaseAgent):
         maze = ctx.maze
 
         if self.phase == Phase.RUSH_TO_EXIT:
-            # 直冲终点，不绕陷阱（时间优先）
-            self._path = self._astar_path(pos, maze.end, maze, avoid_traps=False)
+            # 直冲终点，时间优先，不考虑陷阱代价
+            self._path = self._plan_path(pos, maze.end, maze, avoid_traps=False)
             return
 
         if self.phase == Phase.RUSH_TO_BOSS:
@@ -230,11 +231,8 @@ class GlobalPlannerAgent(BaseAgent):
                 self.phase = Phase.EXPLORE
                 self._replan(ctx)
                 return
-            # 冲 BOSS 时尽量绕陷阱（保留金币）
-            self._path = self._astar_path(pos, goal, maze, avoid_traps=True)
-            if not self._path:
-                # 绕不开陷阱时强行通过
-                self._path = self._astar_path(pos, goal, maze, avoid_traps=False)
+            # 冲 BOSS 时用 Dijkstra 权衡绕路 vs 踩陷阱
+            self._path = self._plan_path(pos, goal, maze, avoid_traps=True)
             return
 
         if self.phase == Phase.EXPLORE:
@@ -244,7 +242,8 @@ class GlobalPlannerAgent(BaseAgent):
                 self.phase = Phase.COLLECT
                 self._replan(ctx)
                 return
-            self._path = self._astar_path(pos, goal, maze, avoid_traps=False)
+            # 探索时不考虑陷阱代价（探索优先于保安全）
+            self._path = self._plan_path(pos, goal, maze, avoid_traps=False)
             return
 
         if self.phase in (Phase.COLLECT, Phase.RETRY_COLLECT):
@@ -254,24 +253,44 @@ class GlobalPlannerAgent(BaseAgent):
                 self.phase = Phase.RUSH_TO_BOSS
                 self._replan(ctx)
                 return
-            self._path = self._astar_path(pos, goal, maze, avoid_traps=True)
-            if not self._path:
-                self._path = self._astar_path(pos, goal, maze, avoid_traps=False)
+            # 收集金币时用 Dijkstra 权衡绕路 vs 踩陷阱
+            self._path = self._plan_path(pos, goal, maze, avoid_traps=True)
 
     # ------------------------------------------------------------------ #
     # 工具
     # ------------------------------------------------------------------ #
-    def _astar_path(
+    def _plan_path(
         self,
         pos: Pos,
         goal: Optional[Pos],
         maze: MazeState,
         avoid_traps: bool,
     ) -> List[Pos]:
+        """
+        路径规划统一入口。
+
+        avoid_traps=False：直接用 A* （步数最短，不考虑陷阱）
+        avoid_traps=True ：用 Dijkstra + 陷阱代价权重，自动权衡
+                          绕路代价 vs 踩陷阱代价，无需降级重试
+        """
         if goal is None:
             return []
-        wk = (lambda r, c: self._custom_walkable(r, c, maze)) if avoid_traps else None
-        path = astar(maze, pos, goal, walkable_override=wk)
+
+        if not avoid_traps:
+            path = astar(maze, pos, goal)
+            return path[1:] if path else []
+
+        # Dijkstra：陷阱格代价 = 1（步数） + trap_step_cost（金币掃分）
+        trap_cost = self.cfg["trap_step_cost"]
+
+        def weight_fn(r: int, c: int) -> float:
+            cell = maze.fog_map[r][c]
+            if cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
+                return 1.0 + trap_cost   # 踩陷阱代价高
+            return 1.0                   # 普通格子代价=1步
+
+        dist, prev = dijkstra(maze, pos, goal=goal, weight_fn=weight_fn)
+        path = extract_path(prev, pos, goal)
         return path[1:] if path else []
 
     def _nearest_frontier(self, pos: Pos, maze: MazeState) -> Optional[Pos]:
@@ -303,7 +322,7 @@ class GlobalPlannerAgent(BaseAgent):
         return best_pos
 
     def _custom_walkable(self, r: int, c: int, maze: MazeState) -> bool:
-        """尽量绕开未触发陷阱"""
+        """仅用于需要硬性封路的场景（现已弹层，保留以备扩展）"""
         if not maze.is_walkable(r, c):
             return False
         cell = maze.fog_map[r][c]

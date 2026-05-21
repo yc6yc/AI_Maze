@@ -14,7 +14,8 @@
     "base_cost": 1.0,
     "rush_round_threshold": 50,
     "retry_buffer": 3,
-    "min_explore_ratio": 0.4
+    "min_explore_ratio": 0.4,
+    "trap_step_cost": 31
   },
   "sim": {
     "max_rounds": 500,
