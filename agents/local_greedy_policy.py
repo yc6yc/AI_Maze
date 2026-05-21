@@ -62,6 +62,8 @@ class LocalGreedyAgent(BaseAgent):
         super().__init__(name="LocalGreedyAgent")
         self.cfg = {**DEFAULT_CONFIG, **(config or {})}
         self.fallback_agent = fallback_agent
+        # 上一步决策后是否处于死路（除来路外无其他可走方向）
+        self.in_dead_end: bool = False
 
     # ------------------------------------------------------------------ #
     # 主接口
@@ -82,9 +84,19 @@ class LocalGreedyAgent(BaseAgent):
                 s_center[move] = (nr, nc)
 
         if not s_center:
+            self.in_dead_end = True
             if self.fallback_agent is not None:
                 return self.fallback_agent.decide(ctx)
             return Action(move="STAY")
+
+        # ── 死路检测：可走方向只有一个，且那个格子是上一步来的位置 ──────
+        prev_pos: Tuple[int, int] | None = (
+            tuple(ctx.history[-1]["pos"]) if ctx.history else None
+        )
+        walkable_positions = set(s_center.values())
+        self.in_dead_end = (
+            len(s_center) == 1 and prev_pos in walkable_positions
+        )
 
         # ── 步骤二：对每个可走方向建子可达集并计分 ──────────────────────
         best_dirs: List[str] = []
