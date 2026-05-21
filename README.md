@@ -52,6 +52,12 @@ python main.py --mode sim --map maze_15_15.json
 # 本地模拟 + 生成 GIF
 python main.py --mode sim --map maze_15_15.json --visualize
 
+# 本地模拟 + 弹出窗口可视化
+python main.py --mode sim --map maze_15_15.json --visualize-window
+
+# 添加迷宫背景
+将 Kenney 资源下载到 `viz/assets/`，并命名为 `background.png` 或 `floor_tile.png`。程序会自动加载背景图或砖块纹理。
+
 # 批量评测（5 次）
 python main.py --mode eval --map maze_15_15.json --runs 5
 
