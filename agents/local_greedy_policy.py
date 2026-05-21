@@ -9,7 +9,6 @@ local_greedy_policy.py — 局部贪心拾取策略（完整 3×3 视野）
      可走的加入中心格的可达集 S_center。
   2. 对 S_center 中的每个方向格 j，检查从 j 可到达的
      对角邻居（仍在 3×3 视野内），可走的加入 j 的可达集 S_j。
-     S_j 是 S_center 的子集概念的延伸。
 
 二、贪心选方向
   对 S_center 中每个方向 d，计算方向得分：
@@ -40,7 +39,14 @@ DEFAULT_CONFIG = {
     "visited_penalty": 1,
     "w_coin": 1.0,
     "w_trap": 1.0,
-    "w_dist": 0.5,
+}
+
+# 每个方向：直接邻居偏移 + 可经由该方向到达的两个对角邻居偏移
+DIRECTION_MAP: Dict[str, dict] = {
+    "UP":    {"direct": (-1,  0), "diagonals": [(-1, -1), (-1,  1)]},
+    "DOWN":  {"direct": ( 1,  0), "diagonals": [( 1, -1), ( 1,  1)]},
+    "LEFT":  {"direct": ( 0, -1), "diagonals": [(-1, -1), ( 1, -1)]},
+    "RIGHT": {"direct": ( 0,  1), "diagonals": [(-1,  1), ( 1,  1)]},
 }
 
 
@@ -63,8 +69,17 @@ class LocalGreedyAgent(BaseAgent):
     def decide(self, ctx: GameContext) -> Action:
         r, c = ctx.player.pos
         maze = ctx.maze
+        visited: Set[Tuple] = {tuple(snap["pos"]) for snap in ctx.history}
 
-        candidates = self._score_3x3(r, c, maze)
+        # ── 步骤一：建中心格可达集 ──────────────────────────────────────
+        # S_center: move -> 直接邻居坐标（仅可走的方向）
+        s_center: Dict[str, Tuple[int, int]] = {}
+        for move, offsets in DIRECTION_MAP.items():
+            dr, dc = offsets["direct"]
+            nr, nc = r + dr, c + dc
+            if (0 <= nr < maze.rows and 0 <= nc < maze.cols
+                    and maze.is_walkable(nr, nc)):
+                s_center[move] = (nr, nc)
 
         if candidates:
             # 按性价比降序，选最高分
@@ -133,34 +148,20 @@ class LocalGreedyAgent(BaseAgent):
         maze: MazeState,
         dist: int,
     ) -> float:
-        """
-        计算格子 (r,c) 的期望得分。
-
-        coin  → +coin_value * w_coin
-        trap  → -trap_penalty * w_trap（已触发的陷阱不重复扣）
-        dist  → -dist * w_dist（距离惩罚）
-        backtrack → -w_backtrack（上一步来的格子，避免原路折返）
-        """
+        """计算单个格子的性价比"""
         cfg = self.cfg
-        cell = maze.fog_map[r][c]
-
         coin_v = 0.0
         trap_v = 0.0
 
         if cell in (CELL_COIN, CELL_GOLD):
-            coin_v = cfg["coin_value"]
-        elif cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
+            return cfg["coin_value"] * cfg["w_coin"]
+        if cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
             trap_v = cfg["trap_penalty"]
 
-        backtrack_penalty = 0.0
-        if self._prev_pos is not None and (r, c) == self._prev_pos:
-            backtrack_penalty = cfg.get("w_backtrack", 2.0)
-
         score = (
-            coin_v  * cfg["w_coin"]
-            - trap_v  * cfg["w_trap"]
-            - dist    * cfg["w_dist"]
-            - backtrack_penalty
+            coin_v * cfg["w_coin"]
+            - trap_v * cfg["w_trap"]
+            - dist  * cfg["w_dist"]   # dist=1（直接邻居）或 2（对角邻居）
         )
         return score
 
