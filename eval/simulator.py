@@ -13,7 +13,7 @@ simulator.py — 本地模拟器（离线验证用）
 
 from __future__ import annotations
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.state import (
     GameContext, MazeState, PlayerState, Skill, Action,
@@ -23,6 +23,20 @@ from agents.base_agent import BaseAgent
 
 COIN_VALUE = 50
 TRAP_DAMAGE = 30
+BossBattleHandler = Callable[[int], int]
+
+
+def boss_battle_entry(current_coins: int) -> int:
+    """
+    Bridge function for the external boss-battle module.
+
+    The maze part calls this when the player reaches a boss tile and passes
+    the current coin count. The real boss-battle owner should return:
+        1: boss defeated, continue moving forward.
+        0: boss not defeated, return to maze start.
+    """
+    print(f"[BOSS] current_coins={current_coins}")
+    return 1
 VIEW_RADIUS = 1   # 3×3 视野半径
 
 
@@ -40,6 +54,7 @@ class LocalSimulator:
         boss_hp: List[int],
         coin_consumption: int,
         min_rounds: int,
+        boss_battle_handler: BossBattleHandler = boss_battle_entry,
     ):
         self.ground_truth = ground_truth
         rows, cols = len(ground_truth), len(ground_truth[0])
@@ -66,6 +81,14 @@ class LocalSimulator:
 
         # 模拟器内部状态
         self._boss_hp: List[int] = list(boss_hp)
+        self._boss_battle_handler = boss_battle_handler
+        self._boss_positions = {
+            (r, c)
+            for r, row in enumerate(ground_truth)
+            for c, cell in enumerate(row)
+            if cell == CELL_BOSS
+        }
+        self._defeated_boss_positions = set()
         self._boss_idx: int = 0   # 当前应击败的 boss 序号（顺序固定）
         self._done: bool = False
         self._won: bool = False
@@ -78,7 +101,11 @@ class LocalSimulator:
     # 工厂方法
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_json(cls, path: str) -> "LocalSimulator":
+    def from_json(
+        cls,
+        path: str,
+        boss_battle_handler: BossBattleHandler = boss_battle_entry,
+    ) -> "LocalSimulator":
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return cls(
@@ -87,6 +114,7 @@ class LocalSimulator:
             boss_hp=data["B"],
             coin_consumption=data["CoinConsumption"],
             min_rounds=data["minRouds"],
+            boss_battle_handler=boss_battle_handler,
         )
 
     # ------------------------------------------------------------------ #
@@ -105,6 +133,8 @@ class LocalSimulator:
         ctx = self.ctx
         player = ctx.player
         player.round_num = self._round
+        ctx.phase = "maze"
+        ctx.boss_result = None
 
         # 1. 移动
         dr, dc = action.delta()
@@ -134,7 +164,7 @@ class LocalSimulator:
             self._handle_boss(action)
 
         elif cell == CELL_END:
-            if self._boss_idx >= len(self._boss_hp):
+            if len(self._defeated_boss_positions) >= len(self._boss_positions):
                 self._done = True
                 self._won = True
 
@@ -144,29 +174,33 @@ class LocalSimulator:
         # 4. 技能冷却
         player.tick_cooldowns()
 
+<<<<<<< HEAD
         # 5. 超时惩罚
-        if self._round > ctx.min_rounds:
-            penalty = ctx.coin_consumption
-            player.coins -= penalty
-
         # 6. 记录快照
+=======
+        # 5. 记录快照（走迷宫无超时金币惩罚；超出 max_rounds 由 run() 的 while 条件终止）
+>>>>>>> fff2a946d0bc01715caf5fd2ebe1293a02fa5267
         ctx.history.append(ctx.snapshot())
 
     def _handle_boss(self, action: Action):
-        """处理 BOSS 战斗"""
-        if self._boss_idx >= len(self._boss_hp):
+        """Enter external boss battle and apply its 1/0 result."""
+        player = self.ctx.player
+        boss_pos = player.pos
+        if boss_pos in self._defeated_boss_positions:
             return
-        if action.use_skill is None:
-            return
-        try:
-            dmg = self.ctx.player.use_skill(action.use_skill)
-        except RuntimeError:
-            return
-        self._boss_hp[self._boss_idx] -= dmg
-        if self._boss_hp[self._boss_idx] <= 0:
-            # BOSS 击败
-            self.ctx.boss_defeated.append(self._boss_hp[self._boss_idx])
-            self._boss_idx += 1
+
+        result = self._boss_battle_handler(player.coins)
+        self.ctx.phase = "boss"
+        self.ctx.boss_result = result
+        if result == 1:
+            self._defeated_boss_positions.add(boss_pos)
+            self.ctx.boss_defeated.append(player.coins)
+            self._boss_idx = len(self._defeated_boss_positions)
+            r, c = boss_pos
+            self.ground_truth[r][c] = " "
+            self.ctx.maze.reveal(r, c, " ")
+        else:
+            player.pos = self.ctx.maze.start or self._find_cell("S") or player.pos
 
     # ------------------------------------------------------------------ #
     # 视野揭露（3×3）

@@ -165,12 +165,19 @@ class GameContext:
     min_rounds: int              # 本轮目标回合数
     boss_defeated: List[int] = field(default_factory=list)   # 已击败 boss 的血量（可见）
     history: List[Dict[str, Any]] = field(default_factory=list)
+    phase: str = "maze"
+    boss_result: Optional[int] = None
 
     def snapshot(self) -> Dict[str, Any]:
         """输出当前快照（用于日志/可视化）"""
         return {
             "round": self.player.round_num,
+            "steps": self.player.round_num,
             "pos": self.player.pos,
             "coins": self.player.coins,
+            "coin_step_ratio": self.player.coins / self.player.round_num if self.player.round_num else 0,
+            "phase": self.phase,
+            "boss_result": self.boss_result,
             "boss_defeated": len(self.boss_defeated),
+            "fog_map": [row[:] for row in self.maze.fog_map],
         }

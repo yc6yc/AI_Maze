@@ -33,7 +33,7 @@ def load_config(path: str = "config.json") -> dict:
         return {}
 
 
-def run_sim(map_path: str, cfg: dict, max_rounds: int = 500, visualize: bool = False):
+def run_sim(map_path: str, cfg: dict, max_rounds: int = 500, visualize: bool = False, visualize_window: bool = False):
     print(f"\n[SIM] 地图: {map_path}")
     sim = LocalSimulator.from_json(map_path)
     agent = CompositeAgent(config=cfg)
@@ -53,6 +53,13 @@ def run_sim(map_path: str, cfg: dict, max_rounds: int = 500, visualize: bool = F
             render_history(sim.ctx.maze, sim.ctx.history, output_path="replay.gif")
         except Exception as e:
             print(f"[VIZ] 可视化失败: {e}")
+
+    if visualize_window:
+        try:
+            from viz.visualizer import render_history_window
+            render_history_window(sim.ctx.maze, sim.ctx.history)
+        except Exception as e:
+            print(f"[VIZ] 窗口可视化失败: {e}")
 
     return stats
 
@@ -86,13 +93,14 @@ def main():
     parser.add_argument("--rounds",    type=int, default=500)
     parser.add_argument("--config",    default="config.json")
     parser.add_argument("--url",       default="http://localhost:8080")
-    parser.add_argument("--visualize", action="store_true")
+    parser.add_argument("--visualize", action="store_true", help="生成 replay.gif 动图")
+    parser.add_argument("--visualize-window", action="store_true", help="弹出交互式可视化窗口")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
 
     if args.mode == "sim":
-        run_sim(args.map, cfg, args.rounds, args.visualize)
+        run_sim(args.map, cfg, args.rounds, args.visualize, args.visualize_window)
     elif args.mode == "eval":
         run_eval(args.map, cfg, args.runs, args.rounds)
     elif args.mode == "online":

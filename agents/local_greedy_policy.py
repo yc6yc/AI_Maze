@@ -58,12 +58,16 @@ class LocalGreedyAgent(BaseAgent):
     选得分最高的方向走。
     """
 
-    def __init__(self, config: dict = None, fallback_agent=None):
+    def __init__(self, config: dict = None):
         super().__init__(name="LocalGreedyAgent")
         self.cfg = {**DEFAULT_CONFIG, **(config or {})}
+<<<<<<< HEAD
         self.fallback_agent = fallback_agent
         # 上一步决策后是否处于死路（除来路外无其他可走方向）
         self.in_dead_end: bool = False
+=======
+        self._prev_pos = None   # 上一步所在位置
+>>>>>>> 7c0c5ce0f55f8918ff0fc94d4ad9e6c1ffec3757
 
     # ------------------------------------------------------------------ #
     # 主接口
@@ -83,6 +87,7 @@ class LocalGreedyAgent(BaseAgent):
                     and maze.is_walkable(nr, nc)):
                 s_center[move] = (nr, nc)
 
+<<<<<<< HEAD
         if not s_center:
             self.in_dead_end = True
             if self.fallback_agent is not None:
@@ -97,31 +102,22 @@ class LocalGreedyAgent(BaseAgent):
         self.in_dead_end = (
             len(s_center) == 1 and prev_pos in walkable_positions
         )
+=======
+        if candidates:
+            # 按性价比降序，选最高分
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            for best_pos, best_score in candidates:
+                if best_score <= 0:
+                    break
+                # 找到本回合应走的第一步
+                first_step = self._first_step(r, c, best_pos, maze)
+                if first_step is not None:
+                    self._prev_pos = (r, c)
+                    return Action(move=_pos_to_move(r, c, first_step))
 
-        # ── 步骤二：对每个可走方向建子可达集并计分 ──────────────────────
-        best_dirs: List[str] = []
-        best_score = float("-inf")
-
-        for move, (nr, nc) in s_center.items():
-            # 直接邻居贡献（步数 = 1）
-            score = self._cell_value(nr, nc, maze, visited)
-
-            # 建方向 d 的子可达集 S_d：经由直接邻居可到达的对角格
-            for ddr, ddc in DIRECTION_MAP[move]["diagonals"]:
-                dnr, dnc = r + ddr, c + ddc
-                if (0 <= dnr < maze.rows and 0 <= dnc < maze.cols
-                        and maze.is_walkable(dnr, dnc)):
-                    # 对角邻居贡献（步数 = 2，除以 2 加入）
-                    score += self._cell_value(dnr, dnc, maze, visited) / 2
-
-            if score > best_score:
-                best_score = score
-                best_dirs = [move]
-            elif score == best_score:
-                best_dirs.append(move)
-
-        # 多个方向并列最高分时随机选一个
-        return Action(move=random.choice(best_dirs))
+        # 3×3 内无正收益 → 返回 STAY，由 CompositeAgent 切换全局规划
+        return Action(move="STAY")
+>>>>>>> 7c0c5ce0f55f8918ff0fc94d4ad9e6c1ffec3757
 
     # ------------------------------------------------------------------ #
     # 格子价值
