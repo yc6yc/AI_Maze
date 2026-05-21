@@ -62,8 +62,10 @@ class LocalGreedyAgent(BaseAgent):
     def decide(self, ctx: GameContext) -> Action:
         r, c = ctx.player.pos
         maze = ctx.maze
+        # 历史走过的格子集合（用于 visited_penalty）
+        visited: set = {tuple(snap["pos"]) for snap in ctx.history} if ctx.history else set()
 
-        candidates = self._score_3x3(r, c, maze)
+        candidates = self._score_3x3(r, c, maze, visited)
 
         if candidates:
             # 按得分降序，选最高分
@@ -88,6 +90,7 @@ class LocalGreedyAgent(BaseAgent):
         r: int,
         c: int,
         maze: MazeState,
+        visited: set = None,
     ) -> List[Tuple[Tuple[int, int], float]]:
         """
         扫描以 (r,c) 为中心的 3×3 窗口内所有可达邻居，
@@ -117,7 +120,7 @@ class LocalGreedyAgent(BaseAgent):
                     if not (maze.is_walkable(*mid1) or maze.is_walkable(*mid2)):
                         continue
 
-                score = self._cell_score(nr, nc, maze, dist)
+                score = self._cell_score(nr, nc, maze, dist, visited or set())
                 results.append(((nr, nc), score))
 
         return results
@@ -131,34 +134,47 @@ class LocalGreedyAgent(BaseAgent):
         c: int,
         maze: MazeState,
         dist: int,
+        visited: set = None,
     ) -> float:
         """
         计算格子 (r,c) 的期望得分。
 
         coin      → +coin_value * w_coin
+        unknown   → +explore_bonus（未探索格代表潜在的金币机会）
         trap      → -trap_penalty * w_trap（已触发的陷阱不重复扣）
         dist      → -dist * w_dist（距离惩罚，dist=1 直接邻居，dist=2 对角）
+        visited   → -visited_penalty（历史走过的格子，避免打转）
         backtrack → -w_backtrack（上一步来的格子，避免原路折返）
         """
         cfg = self.cfg
-        cell = maze.fog_map[r][c]   # None 表示未探索，按空格处理
+        cell = maze.fog_map[r][c]   # None 表示未探索
 
-        coin_v = 0.0
-        trap_v = 0.0
+        coin_v     = 0.0
+        trap_v     = 0.0
+        explore_v  = 0.0
+        visited_v  = 0.0
 
         if cell in (CELL_COIN, CELL_GOLD):
             coin_v = cfg["coin_value"]
         elif cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
             trap_v = cfg["trap_penalty"]
+        elif cell is None:
+            # 未探索格：给予探索期望奖励，鼓励 AI 主动开雾
+            explore_v = cfg.get("explore_bonus", 8.0)
+
+        if visited and (r, c) in visited:
+            visited_v = cfg.get("visited_penalty", 3.0)
 
         backtrack_penalty = 0.0
         if self._prev_pos is not None and (r, c) == self._prev_pos:
             backtrack_penalty = cfg.get("w_backtrack", 2.0)
 
         return (
-            coin_v * cfg["w_coin"]
+            coin_v    * cfg["w_coin"]
+            + explore_v
             - trap_v  * cfg["w_trap"]
             - dist    * cfg["w_dist"]
+            - visited_v
             - backtrack_penalty
         )
 

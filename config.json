@@ -1,12 +1,14 @@
 {
   "_comment": "AI Maze 项目统一参数配置（由角色4评测负责人维护）",
   "local": {
-    "coin_value": 50,
-    "trap_penalty": 30,
-    "w_coin": 1.0,
-    "w_trap": 1.0,
-    "w_dist": 0.5,
-    "w_backtrack": 2.0
+    "coin_value":      50,
+    "trap_penalty":    30,
+    "explore_bonus":   8.0,
+    "visited_penalty": 3.0,
+    "w_backtrack":     2.0,
+    "w_coin":  1.0,
+    "w_trap":  1.0,
+    "w_dist":  0.5
   },
   "global": {
     "w_coin": 2.0,
