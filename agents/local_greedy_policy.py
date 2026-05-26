@@ -33,11 +33,14 @@ from core.state import (
 )
 
 DEFAULT_CONFIG = {
-    "coin_value": 50,
-    "trap_penalty": 30,
-    "visited_penalty": 1,
-    "w_coin": 1.0,
-    "w_trap": 1.0,
+    "coin_value":      50,
+    "trap_penalty":    30,
+    "explore_bonus":   8.0,   # 未探索格的期望奖励
+    "visited_penalty": 3.0,   # 历史走过的格子的惩罚
+    "w_backtrack":     2.0,   # 上一步来的格子额外惩罚（防止原路折返）
+    "w_coin":  1.0,
+    "w_trap":  1.0,
+    "w_dist":  0.5,           # 距离惩罚系数
 }
 
 # 每个方向：直接邻居偏移 + 可经由该方向到达的两个对角邻居偏移
@@ -160,14 +163,14 @@ class LocalGreedyAgent(BaseAgent):
             trap_v = cfg["trap_penalty"]
         elif cell is None:
             # 未探索格：给予探索期望奖励，鼓励 AI 主动开雾
-            explore_v = cfg.get("explore_bonus", 8.0)
+            explore_v = cfg["explore_bonus"]
 
         if visited and (r, c) in visited:
-            visited_v = cfg.get("visited_penalty", 3.0)
+            visited_v = cfg["visited_penalty"]
 
         backtrack_penalty = 0.0
         if self._prev_pos is not None and (r, c) == self._prev_pos:
-            backtrack_penalty = cfg.get("w_backtrack", 2.0)
+            backtrack_penalty = cfg["w_backtrack"]
 
         return (
             coin_v    * cfg["w_coin"]
