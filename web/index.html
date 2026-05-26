@@ -193,6 +193,25 @@
       </aside>
     </main>
 
+    <div id="bossOverlay" class="boss-overlay" hidden aria-hidden="true">
+      <div class="boss-overlay-backdrop"></div>
+      <section class="boss-overlay-shell" aria-label="Boss 战斗层">
+        <div class="boss-overlay-topbar">
+          <div>
+            <p class="eyebrow">Combat Link</p>
+            <h2 id="bossOverlayTitle">Boss 战进行中</h2>
+          </div>
+          <button id="closeBossOverlayBtn" type="button" class="icon-btn" aria-label="关闭 Boss 战">×</button>
+        </div>
+        <iframe
+          id="bossOverlayFrame"
+          class="boss-overlay-frame"
+          title="Boss 战可视化"
+          loading="eager"
+        ></iframe>
+      </section>
+    </div>
+
     <script src="./app.js?v=20260526-local" defer></script>
   </body>
 </html>

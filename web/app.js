@@ -139,6 +139,10 @@
     tileWeight: document.getElementById("tileWeight"),
     eventList: document.getElementById("eventList"),
     legendGrid: document.getElementById("legendGrid"),
+    bossOverlay: document.getElementById("bossOverlay"),
+    bossOverlayTitle: document.getElementById("bossOverlayTitle"),
+    bossOverlayFrame: document.getElementById("bossOverlayFrame"),
+    closeBossOverlayBtn: document.getElementById("closeBossOverlayBtn"),
   };
 
   const ctx = els.canvas.getContext("2d");
@@ -160,6 +164,11 @@
     showHeat: false,
     showSprites: true,
     assets: {},
+    bossBattleActive: false,
+    bossBattlePendingFrame: null,
+    bossBattleQueue: [],
+    bossBattleRequestId: 0,
+    bossAutoResume: false,
     layout: {
       dpr: 1,
       width: 0,
@@ -181,6 +190,10 @@
 
   function cloneGrid(grid) {
     return grid.map((row) => row.slice());
+  }
+
+  function cloneData(data) {
+    return JSON.parse(JSON.stringify(data));
   }
 
   function inBounds(grid, r, c) {
@@ -397,6 +410,12 @@
         phase,
         event,
         sourceCell,
+        bossEncounter: index > 0 && currentCell === "B"
+          ? {
+              bossIndex: bossCount,
+              bossTotal: Array.isArray(data.B) ? data.B.length : bossCount,
+            }
+          : null,
         grid: cloneGrid(mutable),
         revealed: new Set(revealed),
         heat: heat.map((row) => row.slice()),
@@ -418,12 +437,16 @@
     state.frameIndex = 0;
     state.hovered = null;
     state.selected = null;
+    state.bossBattleActive = false;
+    state.bossBattlePendingFrame = null;
+    state.bossBattleQueue = [];
+    state.bossAutoResume = false;
 
     els.mapName.textContent = name;
     els.timeline.max = String(Math.max(0, frames.length - 1));
     els.timeline.value = "0";
     els.metricRoute.textContent = route.length ? String(route.length - 1) : "0";
-    els.mapMeta.textContent = `${data.maze.length} x ${data.maze[0].length}，Boss 血量 ${Array.isArray(data.B) ? data.B.join(" / ") : "-"}，技能 ${Array.isArray(data.PlayerSkills) ? data.PlayerSkills.length : 0} 个`;
+    els.mapMeta.textContent = `${data.maze.length} x ${data.maze[0].length}，Boss ${Array.isArray(data.B) ? data.B.length : 0} 个，技能 ${Array.isArray(data.PlayerSkills) ? data.PlayerSkills.length : 0} 个`;
     updateIntroScreen(data, route, name);
 
     updateUi();
@@ -842,6 +865,7 @@
     if (state.frameIndex >= state.frames.length - 1) stopPlayback();
     updateUi();
     draw();
+    maybeTriggerBossBattle();
   }
 
   function step(delta) {
@@ -865,6 +889,7 @@
   }
 
   function togglePlayback() {
+    if (state.bossBattleActive) return;
     if (state.playing) stopPlayback();
     else {
       if (state.frameIndex >= state.frames.length - 1) setFrame(0);
@@ -874,7 +899,7 @@
   }
 
   function scheduleTick() {
-    if (!state.playing) return;
+    if (!state.playing || state.bossBattleActive) return;
     state.timer = window.setTimeout(() => {
       setFrame(state.frameIndex + 1);
       scheduleTick();
@@ -883,7 +908,71 @@
 
   function reset() {
     stopPlayback();
+    closeBossOverlay(false);
     setFrame(0);
+  }
+
+  function buildBossBattlePayload(frame) {
+    const bossIndex = frame?.bossEncounter?.bossIndex ?? 1;
+    const bossHp = state.data?.B?.[bossIndex - 1];
+    return {
+      requestId: `boss-${Date.now()}-${state.bossBattleRequestId += 1}`,
+      mapName: `${els.mapName.textContent || "maze_15_15.json"} / Boss ${bossIndex}`,
+      startingCoins: frame?.coins ?? 0,
+      PlayerSkills: cloneData(state.data?.PlayerSkills || []),
+      B: Number.isFinite(Number(bossHp)) ? [Number(bossHp)] : [1],
+      minRouds: state.data?.minRouds ?? 1,
+      CoinConsumption: state.data?.CoinConsumption ?? 0,
+      bossIndex,
+      bossTotal: frame?.bossEncounter?.bossTotal ?? 1,
+    };
+  }
+
+  function openBossOverlay(frame) {
+    if (!frame || !frame.bossEncounter || state.bossBattleActive) return;
+    const payload = buildBossBattlePayload(frame);
+    state.bossBattleActive = true;
+    state.bossBattlePendingFrame = state.frameIndex;
+    state.bossAutoResume = true;
+    stopPlayback();
+    document.body.classList.add("overlay-open");
+    els.bossOverlay.hidden = false;
+    els.bossOverlay.setAttribute("aria-hidden", "false");
+    els.bossOverlayTitle.textContent = `Boss ${payload.bossIndex} 战斗中`;
+    const encoded = encodeURIComponent(JSON.stringify(payload));
+    els.bossOverlayFrame.src = `./boss.html?battle=${encoded}`;
+  }
+
+  function closeBossOverlay(resumePlayback = true) {
+    if (!state.bossBattleActive && els.bossOverlay.hidden) return;
+    state.bossBattleActive = false;
+    state.bossBattlePendingFrame = null;
+    els.bossOverlay.hidden = true;
+    els.bossOverlay.setAttribute("aria-hidden", "true");
+    els.bossOverlayFrame.src = "about:blank";
+    document.body.classList.remove("overlay-open");
+    if (resumePlayback && state.bossAutoResume && state.frameIndex < state.frames.length - 1) {
+      startPlayback();
+    } else {
+      updateUi();
+      draw();
+    }
+    state.bossAutoResume = false;
+  }
+
+  function maybeTriggerBossBattle() {
+    const frame = currentFrame();
+    if (!frame?.bossEncounter || state.bossBattleActive) return;
+    if (state.bossBattleQueue.includes(state.frameIndex)) return;
+    state.bossBattleQueue.push(state.frameIndex);
+    openBossOverlay(frame);
+  }
+
+  function handleBossOverlayMessage(event) {
+    const data = event?.data;
+    if (!data || data.type !== "maze-boss-complete") return;
+    if (!state.bossBattleActive) return;
+    closeBossOverlay(true);
   }
 
   function enterMaze() {
@@ -921,6 +1010,9 @@
     els.nextBtn.addEventListener("click", () => {
       stopPlayback();
       step(1);
+    });
+    els.closeBossOverlayBtn.addEventListener("click", () => {
+      closeBossOverlay(false);
     });
 
     els.timeline.addEventListener("input", (event) => {
@@ -996,6 +1088,7 @@
     });
 
     window.addEventListener("resize", draw);
+    window.addEventListener("message", handleBossOverlayMessage);
   }
 
   loadAssets();
