@@ -309,31 +309,38 @@ class GlobalPlannerAgent(BaseAgent):
 
     def _bfs_to_frontier(self, pos: Pos, maze: MazeState) -> Optional[List[Pos]]:
         """
-        BFS 在已知格子中扩展，找到最近的「前沿格子」并返回包含该格的完整路径。
+        BFS 在已知格子中扩展，找到最近的「前沿格子」并返回到达该格的完整路径。
 
         前沿格子：已知可行且至少有一个 fog_map==None 的直接邻居。
-        占一个前沿格子时视野会揭露其未知邻居，因此路径必须包含该格本身。
+        站在前沿格上行动才能揭露未知邻居，因此路径必须包含前沿格本身。
+
+        队列元素：(cur_pos, path_到达cur_pos_不含起点)
+        Bug 修复：
+          1. 前沿检测使用 cur 坐标（之前误用了外层 BFS 函数参数 pos 的 r,c）
+          2. 路径中加入 cur 本身后再返回，避免起点是前沿时返回空列表导致 STAY 死锁
         """
         from collections import deque
-        visited = {pos}
-        # 队列元素：(current_pos, path_so_far包含current_pos)
+        bfs_visited = {pos}
+        # 队列元素：(cur_pos, path_到_cur_不含起点)
         queue = deque([(pos, [])])
 
         while queue:
             cur, path = queue.popleft()
-            r, c = cur
-            # 检查该格子是否是前沿（有未知直接邻居）
-            for nr, nc in maze.neighbors(r, c):
+            cr, cc = cur   # ← 修复1：使用当前节点坐标，而非起点坐标
+
+            # 检查 cur 是否是前沿格（有任意未探索的直接邻居）
+            for nr, nc in maze.neighbors(cr, cc):
                 if maze.fog_map[nr][nc] is None:
-                    # cur 已是前沿格，返回包含 cur 的完整路径
-                    # 站在 cur 上行动就能触发新调论覆陆未知区域
-                    return path  # path 已包含 cur（进队时加入的）
+                    # 修复2：path 不含 cur，需要把 cur 追加进去再返回
+                    return path + [cur]
+
             # 向已知可行格子扩展
-            for nr, nc in maze.neighbors(r, c):
+            for nr, nc in maze.neighbors(cr, cc):
                 nxt = (nr, nc)
-                if nxt not in visited and maze.is_walkable(nr, nc):
-                    visited.add(nxt)
-                    queue.append((nxt, path + [nxt]))  # path + [nxt] 包含 nxt
+                if nxt not in bfs_visited and maze.is_walkable(nr, nc):
+                    bfs_visited.add(nxt)
+                    queue.append((nxt, path + [nxt]))
+
         return None  # 已知区域内无前沿（全图已探索）
 
     def _nearest_frontier(self, pos: Pos, maze: MazeState) -> Optional[Pos]:
