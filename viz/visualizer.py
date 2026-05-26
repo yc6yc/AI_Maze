@@ -30,6 +30,7 @@ from core.state import (
     CELL_TRAP,
     CELL_COIN,
     CELL_GOLD,
+    CELL_START,
     CELL_LOCK,
     CELL_BOSS,
     CELL_END,
@@ -49,7 +50,10 @@ CELL_COLORS: Dict[Optional[str], str] = {
     "L":    "#cc66ff",   # 锁
 }
 PLAYER_COLOR = "#ff00ff"
+FIGURE_BG = "#111018"
+TITLE_COLOR = "#f8e7a0"
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+EFFECTS_DIR = ASSETS_DIR / "effects"
 SPRITE_FILES = {
     "player": ASSETS_DIR / "player.png",
     "boss": ASSETS_DIR / "boss.png",
@@ -58,6 +62,11 @@ SPRITE_FILES = {
     "coin": ASSETS_DIR / "coin.png",
     "trap": ASSETS_DIR / "trap.png",
     "exit": ASSETS_DIR / "exit.png",
+    "lock": ASSETS_DIR / "lock.png",
+    "start": ASSETS_DIR / "start.png",
+}
+EFFECT_FILES = {
+    "boss_enter": EFFECTS_DIR / "boss_enter_effect_sheet.png",
 }
 BACKGROUND_FILE = ASSETS_DIR / "background.png"
 BACKGROUND_TILE_FILE = ASSETS_DIR / "floor_tile.png"
@@ -110,6 +119,35 @@ def _load_sprite(name: str):
     return _load_asset(name, SPRITE_FILES[name])
 
 
+def _load_effect_frames(name: str):
+    """Load a horizontal sprite sheet as effect frames."""
+    if not HAS_MPL:
+        return []
+
+    cache_key = f"effect:{name}"
+    if cache_key in _ASSET_CACHE:
+        return _ASSET_CACHE[cache_key]
+
+    path = EFFECT_FILES.get(name)
+    if path is None or not path.exists():
+        _ASSET_CACHE[cache_key] = []
+        return []
+
+    try:
+        sheet = mpimg.imread(path)
+        height, width = sheet.shape[:2]
+        frame_count = max(1, width // height)
+        frames = [
+            sheet[:, i * height:(i + 1) * height]
+            for i in range(frame_count)
+        ]
+    except Exception:
+        frames = []
+
+    _ASSET_CACHE[cache_key] = frames
+    return frames
+
+
 def _draw_sprite(ax, sprite, cell_x: int, cell_y: int, scale: float = 0.92, zorder: int = 6):
     """在单元格中心绘制 sprite。"""
     if sprite is None:
@@ -134,6 +172,21 @@ def _draw_tile_sprite(ax, name: str, cell_x: int, cell_y: int, scale: float = 1.
     """Draw a named tile image and report whether it was available."""
     sprite = _load_sprite(name)
     return _draw_sprite(ax, sprite, cell_x, cell_y, scale=scale, zorder=zorder)
+
+
+def _draw_effect(ax, effect_name: Optional[str], frame_idx: int, pos: Tuple[float, float], rows: int):
+    """Draw a one-cell visual effect overlay from an effect sheet."""
+    if not effect_name:
+        return False
+
+    frames = _load_effect_frames(effect_name)
+    if not frames:
+        return False
+
+    sprite = frames[frame_idx % len(frames)]
+    row, col = pos
+    cell_y = rows - 1 - row
+    return _draw_sprite(ax, sprite, col, cell_y, scale=1.45, zorder=14)
 
 
 def _draw_base_tile(ax, cell: Optional[str], cell_x: int, cell_y: int):
@@ -170,6 +223,10 @@ def _draw_cell_sprite_overlay(ax, cell: Optional[str], cell_x: int, cell_y: int)
         return _draw_tile_sprite(ax, "boss", cell_x, cell_y, scale=0.92, zorder=8)
     if cell == CELL_END:
         return _draw_tile_sprite(ax, "exit", cell_x, cell_y, scale=0.92, zorder=8)
+    if cell == CELL_LOCK:
+        return _draw_tile_sprite(ax, "lock", cell_x, cell_y, scale=0.92, zorder=8)
+    if cell == CELL_START:
+        return _draw_tile_sprite(ax, "start", cell_x, cell_y, scale=0.9, zorder=5)
     return False
 
 
@@ -198,6 +255,87 @@ def _history_title(snap: Dict[str, Any]) -> str:
         result = "WIN" if snap["boss_result"] == 1 else "LOSE"
         title += f" | Boss {result}"
     return title
+
+
+def _display_pos(snap: Dict[str, Any]) -> Tuple[float, float]:
+    """Return the real draw position, including smooth replay sub-frames."""
+    return tuple(snap.get("draw_pos", snap["pos"]))
+
+
+def _smooth_history_frames(
+    history: List[Dict[str, Any]],
+    frames_per_step: int = 4,
+) -> List[Dict[str, Any]]:
+    """Add interpolated draw positions between adjacent maze snapshots."""
+    if not history or frames_per_step <= 1:
+        return history
+
+    frames: List[Dict[str, Any]] = []
+    for idx, snap in enumerate(history):
+        if idx == 0:
+            first = dict(snap)
+            first["draw_pos"] = tuple(snap["pos"])
+            frames.append(first)
+            continue
+
+        prev = history[idx - 1]
+        prev_pos = tuple(prev["pos"])
+        next_pos = tuple(snap["pos"])
+        distance = abs(next_pos[0] - prev_pos[0]) + abs(next_pos[1] - prev_pos[1])
+        same_step = snap.get("steps", snap.get("round")) == prev.get("steps", prev.get("round"))
+        phase_changed = snap.get("phase") != prev.get("phase")
+
+        boss_entry = (
+            distance == 1 and
+            snap.get("phase") == "boss" and
+            snap.get("boss_result") is None
+        )
+
+        if distance == 1 and ((not same_step and not phase_changed) or boss_entry):
+            for sub_idx in range(1, frames_per_step):
+                t = sub_idx / frames_per_step
+                inter = dict(prev)
+                inter["draw_pos"] = (
+                    prev_pos[0] + (next_pos[0] - prev_pos[0]) * t,
+                    prev_pos[1] + (next_pos[1] - prev_pos[1]) * t,
+                )
+                frames.append(inter)
+
+        final = dict(snap)
+        final["draw_pos"] = next_pos
+        frames.append(final)
+
+    return frames
+
+
+def _expand_effect_frames(frames: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Insert visual-only effect frames without changing game counters."""
+    expanded: List[Dict[str, Any]] = []
+    for snap in frames:
+        if snap.get("phase") == "boss" and snap.get("boss_result") is None:
+            effect_frames = _load_effect_frames("boss_enter")
+            if effect_frames:
+                for effect_idx in range(len(effect_frames)):
+                    effect_snap = dict(snap)
+                    effect_snap["effect_name"] = "boss_enter"
+                    effect_snap["effect_frame"] = effect_idx
+                    effect_snap["effect_pos"] = tuple(snap["pos"])
+                    expanded.append(effect_snap)
+                continue
+        expanded.append(snap)
+    return expanded
+
+
+def _style_pixel_button(button, label: str):
+    """Apply a compact pixel-game look to a matplotlib button."""
+    button.label.set_text(label)
+    button.label.set_fontsize(9)
+    button.label.set_fontweight("bold")
+    button.label.set_color("#f8e7a0")
+    button.ax.set_facecolor("#231b32")
+    for spine in button.ax.spines.values():
+        spine.set_edgecolor("#b59b61")
+        spine.set_linewidth(2.0)
 
 
 def _draw_background(ax, rows: int, cols: int):
@@ -315,9 +453,12 @@ def _draw_cell_icon(ax, cell: str, cell_x: int, cell_y: int, zorder: int = 5):
 
 def render_frame(
     maze: MazeState,
-    player_pos: Tuple[int, int],
+    player_pos: Tuple[float, float],
     ax=None,
     title: str = "",
+    effect_name: Optional[str] = None,
+    effect_frame: int = 0,
+    effect_pos: Optional[Tuple[float, float]] = None,
 ):
     """在给定 axes 上渲染迷宫当前帧"""
     if not HAS_MPL:
@@ -327,6 +468,7 @@ def render_frame(
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
     ax.clear()
+    ax.figure.patch.set_facecolor(FIGURE_BG)
 
     rows, cols = maze.rows, maze.cols
     ax.set_xlim(0, cols)
@@ -335,7 +477,7 @@ def render_frame(
     ax.axis("off")
     _draw_background(ax, rows, cols)
     if title:
-        ax.set_title(title, fontsize=10)
+        ax.set_title(title, fontsize=10, color=TITLE_COLOR, fontweight="bold")
 
     player_sprite = _load_sprite("player")
     for r in range(rows):
@@ -353,7 +495,7 @@ def render_frame(
                 _draw_cell_icon(ax, cell, c, cell_y, zorder=4)
             if cell and cell not in (
                 "#", " ", None, CELL_COIN, CELL_GOLD,
-                CELL_TRAP, CELL_LOCK, CELL_BOSS, CELL_END,
+                CELL_TRAP, CELL_LOCK, CELL_BOSS, CELL_END, CELL_START,
             ):
                 ax.text(
                     c + 0.5, cell_y + 0.5, cell,
@@ -369,6 +511,7 @@ def render_frame(
             color=PLAYER_COLOR, zorder=12
         )
         ax.add_patch(circle)
+    _draw_effect(ax, effect_name, effect_frame, effect_pos or player_pos, rows)
     return ax
 
 
@@ -376,7 +519,8 @@ def render_history(
     maze: MazeState,
     history: List[Dict[str, Any]],
     output_path: str = "replay.gif",
-    fps: int = 4,
+    fps: int = 8,
+    smooth_frames: int = 3,
 ):
     """将 ctx.history 渲染为 GIF"""
     if not HAS_MPL:
@@ -384,20 +528,26 @@ def render_history(
         return
     _load_pyplot(interactive=False)
 
-    fig, ax = plt.subplots(figsize=(7, 7))
-    plt.tight_layout()
+    fig, ax = plt.subplots(figsize=(7, 7), facecolor=FIGURE_BG)
+    plt.tight_layout(pad=0.8)
+
+    frames = _expand_effect_frames(_smooth_history_frames(history, smooth_frames))
+    effective_fps = fps * max(1, smooth_frames)
 
     def update(frame_idx):
-        snap = history[frame_idx]
-        pos = tuple(snap["pos"])
+        snap = frames[frame_idx]
+        pos = _display_pos(snap)
         frame_maze = _maze_for_snapshot(maze, snap)
         render_frame(
             frame_maze, pos, ax=ax,
-            title=_history_title(snap)
+            title=_history_title(snap),
+            effect_name=snap.get("effect_name"),
+            effect_frame=snap.get("effect_frame", 0),
+            effect_pos=snap.get("effect_pos"),
         )
 
-    ani = FuncAnimation(fig, update, frames=len(history), interval=1000 // fps)
-    writer = PillowWriter(fps=fps)
+    ani = FuncAnimation(fig, update, frames=len(frames), interval=1000 // effective_fps)
+    writer = PillowWriter(fps=effective_fps)
     ani.save(output_path, writer=writer)
     plt.close(fig)
     print(f"[visualizer] 已保存回放: {output_path}")
@@ -406,7 +556,8 @@ def render_history(
 def render_history_window(
     maze: MazeState,
     history: List[Dict[str, Any]],
-    fps: int = 4,
+    fps: int = 8,
+    smooth_frames: int = 3,
 ):
     """在弹出窗口中回放历史轨迹，支持按钮控制。"""
     if not HAS_MPL:
@@ -417,23 +568,27 @@ def render_history_window(
         print("[visualizer] 无法加载交互式后端，无法显示窗口")
         return
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(8, 8), facecolor=FIGURE_BG)
     plt.subplots_adjust(bottom=0.16)
 
+    frames = _expand_effect_frames(_smooth_history_frames(history, smooth_frames))
     state = {"idx": 0, "playing": False}
 
     def draw():
-        snap = history[state["idx"]]
-        pos = tuple(snap["pos"])
+        snap = frames[state["idx"]]
+        pos = _display_pos(snap)
         frame_maze = _maze_for_snapshot(maze, snap)
         render_frame(
             frame_maze, pos, ax=ax,
-            title=_history_title(snap)
+            title=_history_title(snap),
+            effect_name=snap.get("effect_name"),
+            effect_frame=snap.get("effect_frame", 0),
+            effect_pos=snap.get("effect_pos"),
         )
         fig.canvas.draw_idle()
 
     def goto(idx: int):
-        state["idx"] = max(0, min(idx, len(history) - 1))
+        state["idx"] = max(0, min(idx, len(frames) - 1))
         draw()
 
     def on_prev(event):
@@ -442,33 +597,37 @@ def render_history_window(
     def on_next(event):
         goto(state["idx"] + 1)
 
-    timer = fig.canvas.new_timer(interval=1000 // fps)
+    effective_fps = fps * max(1, smooth_frames)
+    timer = fig.canvas.new_timer(interval=1000 // effective_fps)
 
     def on_timer():
         if state["playing"]:
-            if state["idx"] < len(history) - 1:
+            if state["idx"] < len(frames) - 1:
                 goto(state["idx"] + 1)
             else:
                 state["playing"] = False
-                play_button.label.set_text("Play")
+                _style_pixel_button(play_button, "PLAY")
                 timer.stop()
 
     timer.add_callback(on_timer)
 
     def on_play(event):
         state["playing"] = not state["playing"]
-        play_button.label.set_text("Pause" if state["playing"] else "Play")
+        _style_pixel_button(play_button, "STOP" if state["playing"] else "PLAY")
         if state["playing"]:
             timer.start()
         else:
             timer.stop()
 
-    axprev = plt.axes([0.18, 0.04, 0.12, 0.06])
-    axplay = plt.axes([0.35, 0.04, 0.12, 0.06])
-    axnext = plt.axes([0.52, 0.04, 0.12, 0.06])
-    prev_button = Button(axprev, "Prev")
-    play_button = Button(axplay, "Play")
-    next_button = Button(axnext, "Next")
+    axprev = plt.axes([0.20, 0.045, 0.10, 0.055])
+    axplay = plt.axes([0.35, 0.045, 0.14, 0.055])
+    axnext = plt.axes([0.54, 0.045, 0.10, 0.055])
+    prev_button = Button(axprev, "<<", color="#231b32", hovercolor="#3a2b55")
+    play_button = Button(axplay, "PLAY", color="#231b32", hovercolor="#3a2b55")
+    next_button = Button(axnext, ">>", color="#231b32", hovercolor="#3a2b55")
+    _style_pixel_button(prev_button, "<<")
+    _style_pixel_button(play_button, "PLAY")
+    _style_pixel_button(next_button, ">>")
     prev_button.on_clicked(on_prev)
     play_button.on_clicked(on_play)
     next_button.on_clicked(on_next)
@@ -487,7 +646,7 @@ def render_path_overlay(
         return
     _load_pyplot(interactive=False)
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(8, 8), facecolor=FIGURE_BG)
     render_frame(maze, path[0] if path else (0, 0), ax=ax)
 
     rows = maze.rows

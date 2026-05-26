@@ -23,10 +23,10 @@ from agents.base_agent import BaseAgent
 
 COIN_VALUE = 50
 TRAP_DAMAGE = 30
-BossBattleHandler = Callable[[int], int]
+BossBattleHandler = Callable[[int], Optional[int]]
 
 
-def boss_battle_entry(current_coins: int) -> int:
+def boss_battle_entry(current_coins: int) -> Optional[int]:
     """
     Bridge function for the external boss-battle module.
 
@@ -34,9 +34,10 @@ def boss_battle_entry(current_coins: int) -> int:
     the current coin count. The real boss-battle owner should return:
         1: boss defeated, continue moving forward.
         0: boss not defeated, return to maze start.
+        None: boss battle is not implemented yet, pause the maze here.
     """
-    print(f"[BOSS] current_coins={current_coins}")
-    return 1
+    print(f"[BOSS] current_coins={current_coins}; waiting for boss battle result")
+    return None
 VIEW_RADIUS = 1   # 3×3 视野半径
 
 
@@ -129,10 +130,8 @@ class LocalSimulator:
         return self.stats()
 
     def _step(self, action: Action):
-        self._round += 1
         ctx = self.ctx
         player = ctx.player
-        player.round_num = self._round
         ctx.phase = "maze"
         ctx.boss_result = None
 
@@ -153,6 +152,8 @@ class LocalSimulator:
         if cell == CELL_TRAP and (pr, pc) not in ctx.maze.triggered_traps:
             player.coins -= TRAP_DAMAGE
             ctx.maze.triggered_traps.add((pr, pc))
+            self.ground_truth[pr][pc] = " "
+            ctx.maze.reveal(pr, pc, " ")
 
         elif cell in (CELL_COIN, CELL_GOLD):
             player.coins += COIN_VALUE
@@ -160,22 +161,57 @@ class LocalSimulator:
             self.ground_truth[pr][pc] = " "
             ctx.maze.reveal(pr, pc, " ")
 
-        elif cell == CELL_BOSS:
-            self._handle_boss(action)
+        elif cell == CELL_BOSS and (pr, pc) not in self._defeated_boss_positions:
+            self._handle_boss_pause(action)
+            return
 
         elif cell == CELL_END:
             if len(self._defeated_boss_positions) >= len(self._boss_positions):
                 self._done = True
                 self._won = True
 
-        # 3. 揭露 FOV
+        self._finish_maze_step()
+
+    def _finish_maze_step(self):
+        self._round += 1
+        self.ctx.player.round_num = self._round
+        self._reveal_fov(self.ctx.player.pos)
+        self.ctx.player.tick_cooldowns()
+        self.ctx.history.append(self.ctx.snapshot())
+
+    def _handle_boss_pause(self, action: Action):
+        """Pause maze step counting while the external boss battle resolves."""
+        ctx = self.ctx
+        player = ctx.player
+        boss_pos = player.pos
+
+        ctx.phase = "boss"
+        ctx.boss_result = None
         self._reveal_fov(player.pos)
+        ctx.history.append(ctx.snapshot())
 
-        # 4. 技能冷却
-        player.tick_cooldowns()
+        result = self._boss_battle_handler(player.coins)
+        if result is None:
+            ctx.boss_result = None
+            self._done = True
+            return
 
-        # 5. 超时惩罚
-        # 6. 记录快照
+        ctx.boss_result = result
+        ctx.history.append(ctx.snapshot())
+
+        if result == 1:
+            self._defeated_boss_positions.add(boss_pos)
+            ctx.boss_defeated.append(player.coins)
+            self._boss_idx = len(self._defeated_boss_positions)
+            r, c = boss_pos
+            self.ground_truth[r][c] = " "
+            ctx.maze.reveal(r, c, " ")
+        else:
+            player.pos = ctx.maze.start or self._find_cell("S") or player.pos
+
+        ctx.phase = "maze"
+        ctx.boss_result = None
+        self._reveal_fov(player.pos)
         ctx.history.append(ctx.snapshot())
 
     def _handle_boss(self, action: Action):

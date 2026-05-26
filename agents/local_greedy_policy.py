@@ -35,12 +35,20 @@ from core.state import (
 DEFAULT_CONFIG = {
     "coin_value": 50,
     "trap_penalty": 30,
+    "empty_value": 1.0,
     "visited_penalty": 1,
     "w_coin": 1.0,
     "w_trap": 1.0,
+    "w_dist": 0.5,
 }
 
 # 每个方向：直接邻居偏移 + 可经由该方向到达的两个对角邻居偏移
+DIRECTION_MAP = {
+    "UP": {"direct": (-1, 0), "diagonals": [(-1, -1), (-1, 1)]},
+    "DOWN": {"direct": (1, 0), "diagonals": [(1, -1), (1, 1)]},
+    "LEFT": {"direct": (0, -1), "diagonals": [(-1, -1), (1, -1)]},
+    "RIGHT": {"direct": (0, 1), "diagonals": [(-1, 1), (1, 1)]},
+}
 
 
 class LocalGreedyAgent(BaseAgent):
@@ -51,9 +59,10 @@ class LocalGreedyAgent(BaseAgent):
     选得分最高的方向走。
     """
 
-    def __init__(self, config: dict = None):
+    def __init__(self, config: dict = None, fallback_agent=None):
         super().__init__(name="LocalGreedyAgent")
         self.cfg = {**DEFAULT_CONFIG, **(config or {})}
+        self.fallback_agent = fallback_agent
         self._prev_pos = None   # 上一步所在位置
 
     # ------------------------------------------------------------------ #
@@ -63,7 +72,8 @@ class LocalGreedyAgent(BaseAgent):
         r, c = ctx.player.pos
         maze = ctx.maze
 
-        candidates = self._score_3x3(r, c, maze)
+        visited = {tuple(snap["pos"]) for snap in ctx.history if "pos" in snap}
+        candidates = self._score_3x3(r, c, maze, visited)
 
         if candidates:
             # 按得分降序，选最高分
@@ -77,6 +87,9 @@ class LocalGreedyAgent(BaseAgent):
                     self._prev_pos = (r, c)
                     return Action(move=_pos_to_move(r, c, first_step))
 
+        if self.fallback_agent is not None:
+            return self.fallback_agent.decide(ctx)
+
         # 3×3 内无正收益 → 返回 STAY，由 CompositeAgent 切换全局规划
         return Action(move="STAY")
 
@@ -88,6 +101,7 @@ class LocalGreedyAgent(BaseAgent):
         r: int,
         c: int,
         maze: MazeState,
+        visited: Set = None,
     ) -> List[Tuple[Tuple[int, int], float]]:
         """
         扫描以 (r,c) 为中心的 3×3 窗口内所有可达邻居，
@@ -98,6 +112,7 @@ class LocalGreedyAgent(BaseAgent):
           - 对角邻居          dist=2（需经由中转格才能到达）
         """
         results: List[Tuple[Tuple[int, int], float]] = []
+        visited = visited or set()
 
         for dr in (-1, 0, 1):
             for dc in (-1, 0, 1):
@@ -117,7 +132,7 @@ class LocalGreedyAgent(BaseAgent):
                     if not (maze.is_walkable(*mid1) or maze.is_walkable(*mid2)):
                         continue
 
-                score = self._cell_score(nr, nc, maze, dist)
+                score = self._cell_score(nr, nc, maze, dist, visited)
                 results.append(((nr, nc), score))
 
         return results
@@ -131,6 +146,7 @@ class LocalGreedyAgent(BaseAgent):
         c: int,
         maze: MazeState,
         dist: int,
+        visited: Set = None,
     ) -> float:
         """
         计算格子 (r,c) 的期望得分。
@@ -142,18 +158,22 @@ class LocalGreedyAgent(BaseAgent):
         """
         cfg = self.cfg
         cell = maze.fog_map[r][c]   # None 表示未探索，按空格处理
+        visited = visited or set()
 
-        coin_v = 0.0
+        coin_v = cfg.get("empty_value", 1.0)
         trap_v = 0.0
 
         if cell in (CELL_COIN, CELL_GOLD):
             coin_v = cfg["coin_value"]
         elif cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
+            coin_v = 0.0
             trap_v = cfg["trap_penalty"]
 
         backtrack_penalty = 0.0
         if self._prev_pos is not None and (r, c) == self._prev_pos:
             backtrack_penalty = cfg.get("w_backtrack", 2.0)
+        if (r, c) in visited:
+            backtrack_penalty += cfg["visited_penalty"]
 
         return (
             coin_v * cfg["w_coin"]
@@ -161,6 +181,17 @@ class LocalGreedyAgent(BaseAgent):
             - dist    * cfg["w_dist"]
             - backtrack_penalty
         )
+
+    def _cell_value(
+        self,
+        r: int,
+        c: int,
+        maze: MazeState,
+        visited: Set,
+        dist: int = 1,
+    ) -> float:
+        """Compatibility wrapper used by verbose demos/tests."""
+        return self._cell_score(r, c, maze, dist, visited)
 
     # ------------------------------------------------------------------ #
     # 对角格子的第一步中转逻辑
