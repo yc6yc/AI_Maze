@@ -73,7 +73,8 @@ class GlobalPlannerAgent(BaseAgent):
         self._path: List[Pos] = []
 
         # 内部追踪量
-        self._known_boss_pos: Optional[Pos] = None   # 从 fog_map 发现的 BOSS 位置
+        self._known_boss_pos: Optional[Pos] = None   # 当前追踪的 BOSS 位置（从列表中选一个）
+        self._all_boss_pos: List[Pos] = []           # fog_map 中已发现的全部 BOSS 位置
         self._prev_coin: int = 0                     # 上回合金币数，用于检测失败扣款
         self._prev_boss_count: int = 0               # 上回合已击败 BOSS 数
 
@@ -81,6 +82,7 @@ class GlobalPlannerAgent(BaseAgent):
         self.phase = Phase.EXPLORE
         self._path = []
         self._known_boss_pos = None
+        self._all_boss_pos = []
         self._prev_coin = ctx.player.coins
         self._prev_boss_count = 0
 
@@ -108,18 +110,29 @@ class GlobalPlannerAgent(BaseAgent):
     # 事件检测
     # ------------------------------------------------------------------ #
     def _scan_boss(self, maze: MazeState):
-        """从 fog_map 中找 BOSS 格子位置；若已消失则清除记录"""
-        if self._known_boss_pos is not None:
-            r, c = self._known_boss_pos
-            if maze.fog_map[r][c] != CELL_BOSS:
-                # BOSS 格子内容已改变（全部击败后服务器会更新）
-                self._known_boss_pos = None
-            return
+        """
+        从 fog_map 中扫描全部 BOSS 格子位置，支持多 BOSS 地图。
+        - 已发现的 BOSS 若格子内容变化（被击败）则从列表移除
+        - 从剩余列表中选距离当前 _known_boss_pos 最近的作为当前目标
+          （简化为选列表第一个）
+        """
+        # 清理已被击败的 BOSS
+        self._all_boss_pos = [
+            (r, c) for (r, c) in self._all_boss_pos
+            if maze.fog_map[r][c] == CELL_BOSS
+        ]
+        # 扫描新出现的 BOSS
         for r in range(maze.rows):
             for c in range(maze.cols):
-                if maze.fog_map[r][c] == CELL_BOSS:
-                    self._known_boss_pos = (r, c)
-                    return
+                if maze.fog_map[r][c] == CELL_BOSS and (r, c) not in self._all_boss_pos:
+                    self._all_boss_pos.append((r, c))
+
+        # 更新当前目标 BOSS：若当前目标已消失则换下一个
+        if self._known_boss_pos is not None:
+            if maze.fog_map[self._known_boss_pos[0]][self._known_boss_pos[1]] != CELL_BOSS:
+                self._known_boss_pos = None
+        if self._known_boss_pos is None and self._all_boss_pos:
+            self._known_boss_pos = self._all_boss_pos[0]
 
     def _detect_failure(self, ctx: GameContext):
         """
@@ -140,13 +153,13 @@ class GlobalPlannerAgent(BaseAgent):
     def _detect_boss_defeated(self, ctx: GameContext):
         """
         所有 BOSS 击败检测：
-        策略：fog_map 中 BOSS 格消失（服务器更新格子内容）
-        或 boss_defeated 列表增长后用 BFS 确认终点可直接到达。
+        - fog_map 中所有已知 BOSS 格均消失（_all_boss_pos 为空）且曾击败过至少一个
+        - 或 boss_defeated 增长后 BFS 确认终点无阻断
         """
         if self.phase == Phase.RUSH_TO_EXIT:
             return
-        # BOSS 格已消失 + 曾击败过至少一个 BOSS
-        if self._known_boss_pos is None and len(ctx.boss_defeated) > 0:
+        # 多 BOSS 支持：所有已发现的 BOSS 都消失 + 曾击败过至少一个
+        if len(self._all_boss_pos) == 0 and len(ctx.boss_defeated) > 0:
             self.phase = Phase.RUSH_TO_EXIT
             self._path = []
             return
@@ -296,31 +309,38 @@ class GlobalPlannerAgent(BaseAgent):
 
     def _bfs_to_frontier(self, pos: Pos, maze: MazeState) -> Optional[List[Pos]]:
         """
-        BFS 在已知格子中扩展，找到最近的「前沿格子」（已知可行且有未知邻居）。
+        BFS 在已知格子中扩展，找到最近的「前沿格子」并返回到达该格的完整路径。
 
-        与普通寻路的关键区别：
-          - 只在 fog_map != None 的已知格子中行走（不尝试走进黑难区域）
-          - 终点条件是该格子有至少一个 fog_map==None 的邻居
-          - 直接返回完整路径，节省一步调用
+        前沿格子：已知可行且至少有一个 fog_map==None 的直接邻居。
+        站在前沿格上行动才能揭露未知邻居，因此路径必须包含前沿格本身。
+
+        队列元素：(cur_pos, path_到达cur_pos_不含起点)
+        Bug 修复：
+          1. 前沿检测使用 cur 坐标（之前误用了外层 BFS 函数参数 pos 的 r,c）
+          2. 路径中加入 cur 本身后再返回，避免起点是前沿时返回空列表导致 STAY 死锁
         """
         from collections import deque
-        visited = {pos}
-        # 队列元素：(current_pos, path_so_far)
+        bfs_visited = {pos}
+        # 队列元素：(cur_pos, path_到_cur_不含起点)
         queue = deque([(pos, [])])
 
         while queue:
             cur, path = queue.popleft()
-            r, c = cur
-            # 检查该格子是否是前沿（有未知邻居）
-            for nr, nc in maze.neighbors(r, c):
+            cr, cc = cur   # ← 修复1：使用当前节点坐标，而非起点坐标
+
+            # 检查 cur 是否是前沿格（有任意未探索的直接邻居）
+            for nr, nc in maze.neighbors(cr, cc):
                 if maze.fog_map[nr][nc] is None:
-                    return path  # 找到前沿，返回到达该前沿旁边的路径
+                    # 修复2：path 不含 cur，需要把 cur 追加进去再返回
+                    return path + [cur]
+
             # 向已知可行格子扩展
-            for nr, nc in maze.neighbors(r, c):
+            for nr, nc in maze.neighbors(cr, cc):
                 nxt = (nr, nc)
-                if nxt not in visited and maze.is_walkable(nr, nc):
-                    visited.add(nxt)
+                if nxt not in bfs_visited and maze.is_walkable(nr, nc):
+                    bfs_visited.add(nxt)
                     queue.append((nxt, path + [nxt]))
+
         return None  # 已知区域内无前沿（全图已探索）
 
     def _nearest_frontier(self, pos: Pos, maze: MazeState) -> Optional[Pos]:
@@ -329,16 +349,43 @@ class GlobalPlannerAgent(BaseAgent):
         return path[-1] if path else None
 
     def _best_coin_target(self, pos: Pos, maze: MazeState) -> Optional[Pos]:
-        """性价比最高的金币格子：coin_value / (曼哈顿距离 + 1)"""
+        """
+        收益最高的金币目标：用 BFS 实际路径距离计算性价比。
+
+        旧版用曼哈顿距离估算，迫路时会选到实际要绕很远路的目标。
+        BFS 距离 = 过已知格子的最短路径步数（不走入黑雾区域）。
+        """
+        from collections import deque
+
+        # 先收集所有金币位置
+        coin_cells = [
+            (r, c)
+            for r in range(maze.rows)
+            for c in range(maze.cols)
+            if maze.fog_map[r][c] in (CELL_COIN, CELL_GOLD)
+        ]
+        if not coin_cells:
+            return None
+
+        # 一次 BFS 计算从 pos 到已知可达格子的最短距离
+        dist_map: dict = {pos: 0}
+        queue = deque([pos])
+        while queue:
+            cur = queue.popleft()
+            for nr, nc in maze.neighbors(*cur):
+                nxt = (nr, nc)
+                if nxt not in dist_map and maze.is_walkable(nr, nc):
+                    dist_map[nxt] = dist_map[cur] + 1
+                    queue.append(nxt)
+
         best_score, best_pos = -1e9, None
-        for r in range(maze.rows):
-            for c in range(maze.cols):
-                if maze.fog_map[r][c] not in (CELL_COIN, CELL_GOLD):
-                    continue
-                dist = abs(r - pos[0]) + abs(c - pos[1]) + 1
-                score = self.cfg["w_coin"] * 50 / dist
-                if score > best_score:
-                    best_score, best_pos = score, (r, c)
+        for (r, c) in coin_cells:
+            bfs_dist = dist_map.get((r, c))
+            if bfs_dist is None:
+                continue  # 该金币目前不可达（封閉在未探索区）
+            score = self.cfg["w_coin"] * 50 / (bfs_dist + 1)
+            if score > best_score:
+                best_score, best_pos = score, (r, c)
         return best_pos
 
 def _pos_to_move(src: Pos, dst: Pos) -> str:

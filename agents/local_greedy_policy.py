@@ -33,13 +33,12 @@ from core.state import (
 )
 
 DEFAULT_CONFIG = {
-    "coin_value": 50,
-    "trap_penalty": 30,
-    "empty_value": 1.0,
-    "visited_penalty": 1,
-    "w_coin": 1.0,
-    "w_trap": 1.0,
-    "w_dist": 0.5,
+    "coin_value":      50,    # 金币的真实游戏价值
+    "trap_penalty":    30,    # 陷阱的真实游戏扣分
+    "step_cost":       10.0,  # 每步的机会成本估算（用于 value/steps 收益率计算）
+    "explore_bonus":   8.0,   # 未探索直接邻居的期望奖励（在 _score_3x3 中单独使用）
+    "visited_penalty": 3.0,   # 历史走过格子的额外惩罚（防打转）
+    "w_backtrack":     2.0,   # 回头路额外惩罚（防折返）
 }
 
 # 每个方向：直接邻居偏移 + 可经由该方向到达的两个对角邻居偏移
@@ -71,8 +70,9 @@ class LocalGreedyAgent(BaseAgent):
     def decide(self, ctx: GameContext) -> Action:
         r, c = ctx.player.pos
         maze = ctx.maze
+        # 历史走过的格子集合（用于 visited_penalty）
+        visited: set = {tuple(snap["pos"]) for snap in ctx.history} if ctx.history else set()
 
-        visited = {tuple(snap["pos"]) for snap in ctx.history if "pos" in snap}
         candidates = self._score_3x3(r, c, maze, visited)
 
         if candidates:
@@ -101,15 +101,21 @@ class LocalGreedyAgent(BaseAgent):
         r: int,
         c: int,
         maze: MazeState,
-        visited: Set = None,
+        visited: set = None,
     ) -> List[Tuple[Tuple[int, int], float]]:
         """
-        扫描以 (r,c) 为中心的 3×3 窗口内所有可达邻居，
-        返回 [(pos, score), ...] 列表（仅包含可走格，不含中心格本身）。
+        扫描以 (r,c) 为中心的 3×3 窗口内所有邻居，
+        返回 [(pos, score), ...] 列表（不含中心格本身）。
 
         距离定义：
           - 上下左右直接邻居  dist=1
           - 对角邻居          dist=2（需经由中转格才能到达）
+
+        Bug 修复：
+          之前用 is_walkable 过滤所有格子，导致黑雾格（fog_map=None）
+          被排除在外，_cell_score 里的 explore_bonus 永远不会被计算。
+          修复：直接邻居（dist=1）中的黑雾格单独纳入评分（explore_bonus）；
+                对角邻居（dist=2）仍要求实际可走才能到达，不处理黑雾对角格。
         """
         results: List[Tuple[Tuple[int, int], float]] = []
         visited = visited or set()
@@ -121,18 +127,34 @@ class LocalGreedyAgent(BaseAgent):
                 nr, nc = r + dr, c + dc
                 if not (0 <= nr < maze.rows and 0 <= nc < maze.cols):
                     continue
-                if not maze.is_walkable(nr, nc):
-                    continue
 
                 dist = abs(dr) + abs(dc)  # 1 或 2
-                # 对角格子（dist=2）需要至少一个中转格可走才能实际到达
-                if dist == 2:
+
+                if dist == 1:
+                    # 直接邻居：可走格 or 黑雾格（fog_map=None）都纳入评分
+                    # 黑雾格 is_walkable==False，但走向它会揭露视野，值得探索
+                    cell = maze.fog_map[nr][nc]
+                    if cell is None:
+                        # 黑雾直接邻居：只给探索奖励，不扣距离（走一步就能揭露）
+                        score = self.cfg["explore_bonus"]
+                        # 回头路惩罚仍然适用
+                        if self._prev_pos is not None and (nr, nc) == self._prev_pos:
+                            score -= self.cfg["w_backtrack"]
+                        results.append(((nr, nc), score))
+                        continue
+                    elif not maze.is_walkable(nr, nc):
+                        # 已知不可走（墙）：跳过
+                        continue
+                else:
+                    # 对角邻居（dist=2）：必须实际可走才能到达
+                    if not maze.is_walkable(nr, nc):
+                        continue
                     mid1 = (r, nc)   # 先横后竖的中转
                     mid2 = (nr, c)   # 先竖后横的中转
                     if not (maze.is_walkable(*mid1) or maze.is_walkable(*mid2)):
                         continue
 
-                score = self._cell_score(nr, nc, maze, dist, visited)
+                score = self._cell_score(nr, nc, maze, dist, visited or set())
                 results.append(((nr, nc), score))
 
         return results
@@ -146,41 +168,59 @@ class LocalGreedyAgent(BaseAgent):
         c: int,
         maze: MazeState,
         dist: int,
-        visited: Set = None,
+        visited: set = None,
     ) -> float:
         """
-        计算格子 (r,c) 的期望得分。
+        计算格子 (r,c) 的期望每步净收益（value/steps 形式）。
 
-        coin      → +coin_value * w_coin
-        trap      → -trap_penalty * w_trap（已触发的陷阱不重复扣）
-        dist      → -dist * w_dist（距离惩罚，dist=1 直接邻居，dist=2 对角）
-        backtrack → -w_backtrack（上一步来的格子，避免原路折返）
+        游戏评分 = total_value / total_steps
+          total_value = 金币×50 - 陷阱×30 - 失败次数×CoinConsumption
+
+        因此每步走向目标格的「净收益率」为：
+          score = (格子真实价值 - 步数机会成本) / dist
+                + 其他修正项（explore奖励、visited惩罚、回头路惩罚）
+
+        步数机会成本：每走一步让分母+1，相当于损失当前已有价值的
+          1/total_steps，这里用一个固定估算值 step_cost 代替。
+
+        各参数含义（config.json local 节）：
+          coin_value     = 金币的真实游戏价值（50）
+          trap_penalty   = 陷阱的真实游戏扣分（30）
+          step_cost      = 每步的机会成本估算（默认10，可调）
+          explore_bonus  = 未探索格的期望价值（黑雾格在_score_3x3中单独处理，这里不会触发）
+          visited_penalty= 历史走过格子的额外惩罚（防打转）
+          w_backtrack    = 回头路额外惩罚（防折返）
         """
         cfg = self.cfg
-        cell = maze.fog_map[r][c]   # None 表示未探索，按空格处理
-        visited = visited or set()
+        cell = maze.fog_map[r][c]   # None 表示未探索
 
-        coin_v = cfg.get("empty_value", 1.0)
-        trap_v = 0.0
-
+        # 真实游戏价值
+        raw_value = 0.0
         if cell in (CELL_COIN, CELL_GOLD):
-            coin_v = cfg["coin_value"]
+            raw_value = cfg["coin_value"]          # +50
         elif cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
-            coin_v = 0.0
-            trap_v = cfg["trap_penalty"]
+            raw_value = -cfg["trap_penalty"]        # -30（已触发的陷阱不重复扣）
+        elif cell is None:
+            # 黑雾直接邻居已在 _score_3x3 中单独计分，不会走到这里
+            raw_value = cfg.get("explore_bonus", 8.0)
 
-        backtrack_penalty = 0.0
+        # 步数机会成本：走 dist 步相当于花掉 dist × step_cost 的潜在价值
+        step_cost = cfg.get("step_cost", 10.0)
+        movement_cost = dist * step_cost
+
+        # 每步净收益率：(真实价值 - 步数成本) / 步数
+        # dist=1 时 score = raw_value - step_cost
+        # dist=2 时 score = (raw_value - 2×step_cost) / 2，对角格自动更难竞争
+        score = (raw_value - movement_cost) / dist
+
+        # 修正项（不除以dist，作为绝对惩罚叠加）
+        if visited and (r, c) in visited:
+            score -= cfg["visited_penalty"]
+
         if self._prev_pos is not None and (r, c) == self._prev_pos:
-            backtrack_penalty = cfg.get("w_backtrack", 2.0)
-        if (r, c) in visited:
-            backtrack_penalty += cfg["visited_penalty"]
+            score -= cfg["w_backtrack"]
 
-        return (
-            coin_v * cfg["w_coin"]
-            - trap_v  * cfg["w_trap"]
-            - dist    * cfg["w_dist"]
-            - backtrack_penalty
-        )
+        return score
 
     def _cell_value(
         self,
