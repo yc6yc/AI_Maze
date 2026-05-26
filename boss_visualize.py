@@ -13,6 +13,7 @@ from pathlib import Path
 
 from core.state import GameContext, MazeState, PlayerState, Skill
 from viz.boss_battle_visualizer import (
+    DEFAULT_BOSS_BATTLE_FPS,
     render_boss_battle_window,
     save_boss_battle_gif,
     simulate_boss_battle_frames,
@@ -54,7 +55,7 @@ def build_boss_demo_context(map_path: str) -> tuple[GameContext, list[int]]:
 def main():
     parser = argparse.ArgumentParser(description="独立 BOSS 战可视化")
     parser.add_argument("--map", default="maze_15_15.json")
-    parser.add_argument("--fps", type=int, default=3)
+    parser.add_argument("--fps", type=int, default=DEFAULT_BOSS_BATTLE_FPS)
     parser.add_argument("--save-gif", action="store_true")
     parser.add_argument("--gif-path", default="boss_battle.gif")
     args = parser.parse_args()

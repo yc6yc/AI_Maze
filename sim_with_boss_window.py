@@ -14,10 +14,10 @@ from pathlib import Path
 from agents.composite_agent import CompositeAgent
 from eval.simulator import LocalSimulator
 from main import load_config
-from viz.boss_battle_visualizer import make_visual_boss_battle_handler
+from viz.boss_battle_visualizer import DEFAULT_BOSS_BATTLE_FPS, make_visual_boss_battle_handler
 
 
-def run_sim_with_boss_window(map_path: str, cfg: dict, max_rounds: int = 500, fps: int = 3):
+def run_sim_with_boss_window(map_path: str, cfg: dict, max_rounds: int = 500, fps: int = DEFAULT_BOSS_BATTLE_FPS):
     with open(map_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -41,7 +41,7 @@ def main():
     parser.add_argument("--map", default="maze_15_15.json")
     parser.add_argument("--rounds", type=int, default=500)
     parser.add_argument("--config", default="config.json")
-    parser.add_argument("--fps", type=int, default=3)
+    parser.add_argument("--fps", type=int, default=DEFAULT_BOSS_BATTLE_FPS)
     args = parser.parse_args()
 
     cfg = load_config(args.config)
