@@ -404,6 +404,87 @@ def test_can_defeat_in_time_respects_boss_battle_round_limit():
     assert agent.can_defeat_in_time(ctx, boss_hp=70) is False
 
 
+def test_memory_planner_replans_after_first_failed_attempt():
+    """
+    记忆逻辑：当第一轮挑战在 min_rounds 内失败后，
+    第二轮应基于失败序列重规划，而不是机械重复。
+    """
+    ctx = build_context(
+        grid=[
+            ["#", "#", "#"],
+            ["#", "B", "#"],
+            ["#", "#", "#"],
+        ],
+        pos=(1, 1),
+        coins=100,
+        # 两个技能都无冷却，默认贪心第一轮会连续放技能0
+        skill_specs=[
+            (9, 0, 0),
+            (8, 0, 0),
+        ],
+        boss_defeated=[],
+        coin_consumption=5,
+        min_rounds=2,
+    )
+    agent = CombatAgent(enable_memory=True)
+
+    # 第一次挑战（2回合），记录到失败序列
+    first_round_actions = []
+    for _ in range(ctx.min_rounds):
+        action = agent.decide_combat_with_memory(ctx)
+        first_round_actions.append(action.use_skill)
+        if action.use_skill is not None:
+            ctx.player.use_skill(action.use_skill)
+        ctx.player.tick_cooldowns()
+
+    # 第二次挑战第一回合：应优先避开第一轮同回合使用过的技能
+    action_second_attempt = agent.decide_combat_with_memory(ctx)
+    assert first_round_actions[0] == 0
+    assert action_second_attempt.use_skill == 1
+
+
+def test_memory_planner_accumulates_failed_sequences():
+    """
+    记忆逻辑应累计多次失败序列参与重规划。
+    """
+    ctx = build_context(
+        grid=[
+            ["#", "#", "#"],
+            ["#", "B", "#"],
+            ["#", "#", "#"],
+        ],
+        pos=(1, 1),
+        coins=100,
+        skill_specs=[
+            (10, 1, 0),
+            (9, 1, 0),
+            (8, 1, 0),
+        ],
+        boss_defeated=[],
+        coin_consumption=5,
+        min_rounds=1,
+    )
+    agent = CombatAgent(enable_memory=True)
+
+    # 第1次失败：回合1通常选技能0
+    a1 = agent.decide_combat_with_memory(ctx).use_skill
+    if a1 is not None:
+        ctx.player.use_skill(a1)
+    ctx.player.tick_cooldowns()
+
+    # 第2次失败开始：应避开技能0，优先技能1
+    a2 = agent.decide_combat_with_memory(ctx).use_skill
+    if a2 is not None:
+        ctx.player.use_skill(a2)
+    ctx.player.tick_cooldowns()
+
+    # 第3次失败开始：应继续避开前两次（0/1），优先技能2
+    a3 = agent.decide_combat_with_memory(ctx).use_skill
+    assert a1 == 0
+    assert a2 == 1
+    assert a3 == 2
+
+
 def test_verbose_combat_flow_prints_full_battle_log():
     """
     这个测试除了断言结果，还会把完整打怪过程打印到控制台。

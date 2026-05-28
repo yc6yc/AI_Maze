@@ -243,7 +243,7 @@ def simulate_boss_battle_frames(ctx: GameContext, boss_hps: List[int]) -> List[B
     from copy import deepcopy
 
     sim_ctx = deepcopy(ctx)
-    agent = CombatAgent()
+    agent = CombatAgent(enable_memory=True)
     frames: List[BossBattleFrame] = []
     total_round = 0
 
@@ -255,7 +255,7 @@ def simulate_boss_battle_frames(ctx: GameContext, boss_hps: List[int]) -> List[B
             attempt += 1
             for attack_round in range(1, sim_ctx.min_rounds + 1):
                 total_round += 1
-                action = agent.decide_combat(sim_ctx)
+                action = agent.decide_combat_with_memory(sim_ctx)
                 damage = 0
                 if action.use_skill is not None:
                     damage = sim_ctx.player.use_skill(action.use_skill)
@@ -299,6 +299,7 @@ def simulate_boss_battle_frames(ctx: GameContext, boss_hps: List[int]) -> List[B
 
                 if defeated:
                     sim_ctx.boss_defeated.append(boss_hp_max)
+                    agent.mark_boss_defeated(sim_ctx)
                     break
 
             if boss_hp <= 0:
