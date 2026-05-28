@@ -1,8 +1,9 @@
 .boss-page {
   background:
-    linear-gradient(140deg, rgba(15, 139, 141, 0.08), transparent 34%),
-    linear-gradient(320deg, rgba(228, 87, 46, 0.1), transparent 30%),
-    #f5f7fb;
+    radial-gradient(circle at 24% 18%, rgba(37, 99, 235, 0.2), transparent 26%),
+    radial-gradient(circle at 78% 16%, rgba(228, 87, 46, 0.22), transparent 30%),
+    linear-gradient(145deg, #050711, #111827 52%, #170b12);
+  color: #f8fafc;
   overflow-y: auto;
 }
 
@@ -22,12 +23,81 @@
   grid-template-columns: minmax(260px, 320px) minmax(540px, 1fr) minmax(300px, 360px);
   min-height: 100vh;
   align-items: start;
+  animation: bossPageIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .boss-shell .control-panel,
 .boss-shell .insight-panel {
   max-height: calc(100vh - 36px);
   overflow: auto;
+}
+
+.boss-shell .panel,
+.boss-stage-panel {
+  border-color: rgba(148, 163, 184, 0.22);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(8, 13, 25, 0.94));
+  color: #f8fafc;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
+}
+
+.boss-shell .metric-tile,
+.boss-shell .detail-grid div,
+.boss-shell .cell-readout,
+.skill-card,
+.boss-shell .toggle-field,
+.boss-shell .segmented-control,
+.boss-shell .number-field input {
+  border-color: rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.76);
+  color: #f8fafc;
+}
+
+.boss-shell .metric-tile span,
+.boss-shell .detail-grid dt,
+.boss-shell .meta-text,
+.boss-shell .number-field,
+.skill-card-meta,
+.event-copy {
+  color: #94a3b8;
+}
+
+.boss-shell .section-title,
+.boss-shell .brand-block h1,
+.boss-shell .stage-topbar h2,
+.boss-shell .metric-tile strong,
+.boss-shell .detail-grid dd {
+  color: #f8fafc;
+}
+
+.boss-shell .status-pill {
+  border-color: rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.86);
+  color: #dbeafe;
+}
+
+.boss-shell .status-pill.accent {
+  border-color: rgba(45, 212, 191, 0.32);
+  background: rgba(20, 184, 166, 0.16);
+  color: #99f6e4;
+}
+
+.boss-shell .segment {
+  color: #94a3b8;
+}
+
+.boss-shell .segment.active {
+  background: rgba(242, 165, 65, 0.18);
+  color: #fff7ed;
+  box-shadow: 0 0 18px rgba(242, 165, 65, 0.1);
+}
+
+.boss-shell .secondary-btn,
+.boss-shell .file-btn,
+.boss-shell .icon-btn {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(15, 23, 42, 0.78);
+  color: #f8fafc;
 }
 
 .boss-intro-content {
@@ -197,9 +267,14 @@
   min-height: 0;
   aspect-ratio: 16 / 9;
   background:
-    radial-gradient(circle at 24% 24%, rgba(37, 99, 235, 0.08), transparent 22%),
-    radial-gradient(circle at 78% 20%, rgba(220, 38, 38, 0.12), transparent 26%),
+    radial-gradient(circle at 24% 24%, rgba(37, 99, 235, 0.18), transparent 22%),
+    radial-gradient(circle at 78% 20%, rgba(220, 38, 38, 0.22), transparent 26%),
     #05060a;
+  border-color: rgba(251, 113, 133, 0.22);
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 38px rgba(228, 87, 46, 0.12);
 }
 
 #bossCanvas {
@@ -225,10 +300,10 @@
 .number-field input {
   min-height: 40px;
   padding: 0 12px;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 8px;
-  background: #fff;
-  color: var(--ink);
+  background: rgba(15, 23, 42, 0.76);
+  color: #f8fafc;
 }
 
 .skill-list {
@@ -240,17 +315,22 @@
   min-width: 0;
   padding: 10px 11px;
   border-radius: 8px;
-  border: 1px solid var(--line);
-  background: #fbfcff;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.74);
 }
 
 .skill-card.active {
-  border-color: rgba(15, 139, 141, 0.4);
-  box-shadow: 0 8px 20px rgba(15, 139, 141, 0.08);
+  border-color: rgba(242, 165, 65, 0.72);
+  background:
+    linear-gradient(135deg, rgba(242, 165, 65, 0.18), rgba(228, 87, 46, 0.12)),
+    rgba(15, 23, 42, 0.82);
+  box-shadow:
+    0 10px 24px rgba(242, 165, 65, 0.12),
+    0 0 24px rgba(228, 87, 46, 0.1);
 }
 
 .skill-card.cooling {
-  background: #f8fafc;
+  background: rgba(15, 23, 42, 0.52);
 }
 
 .skill-card-header {
@@ -261,17 +341,18 @@
 }
 
 .skill-card-header strong {
+  color: #f8fafc;
   font-size: 13px;
 }
 
 .skill-state {
-  color: var(--muted);
+  color: #cbd5e1;
   font-size: 12px;
   font-weight: 800;
 }
 
 .skill-state.ready {
-  color: var(--green);
+  color: #86efac;
 }
 
 .skill-card-meta {
@@ -288,29 +369,29 @@
   height: 8px;
   overflow: hidden;
   border-radius: 999px;
-  background: #e8edf5;
+  background: rgba(15, 23, 42, 0.9);
 }
 
 .skill-bar-fill {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--teal), #3b82f6);
+  background: linear-gradient(90deg, #14b8a6, #f2a541, #e4572e);
 }
 
 .event-list li.phase-damage .event-copy {
-  color: #7c2d12;
+  color: #fed7aa;
 }
 
 .event-list li.phase-retry .event-copy {
-  color: #92400e;
+  color: #fde68a;
 }
 
 .event-list li.phase-failed .event-copy {
-  color: #b91c1c;
+  color: #fecaca;
 }
 
 .event-list li.phase-win .event-copy {
-  color: #166534;
+  color: #bbf7d0;
 }
 
 @media (max-width: 1280px) {
@@ -385,5 +466,18 @@
   50% {
     opacity: 1;
     transform: translateX(14px) rotate(-18deg);
+  }
+}
+
+@keyframes bossPageIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+    filter: saturate(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: saturate(1);
   }
 }

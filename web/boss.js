@@ -35,23 +35,23 @@
   };
 
   const TIMELINE = [
-    { phase: "windup", motionT: 0.05, durationMs: 56, hitFlash: 0, shake: 0, impactText: null },
-    { phase: "attack", motionT: 0.22, durationMs: 50, hitFlash: 0, shake: 0, impactText: null },
-    { phase: "lunge", motionT: 0.38, durationMs: 44, hitFlash: 0, shake: 0, impactText: null },
-    { phase: "impact", motionT: 0.52, durationMs: 68, hitFlash: 1, shake: 1, impactText: true },
-    { phase: "recover", motionT: 0.74, durationMs: 58, hitFlash: 0, shake: 0.25, impactText: null },
-    { phase: "idle", motionT: 0.96, durationMs: 72, hitFlash: 0, shake: 0, impactText: null },
+    { phase: "windup", motionT: 0.05, durationMs: 180, hitFlash: 0, shake: 0, impactText: null },
+    { phase: "attack", motionT: 0.24, durationMs: 130, hitFlash: 0, shake: 0, impactText: null },
+    { phase: "lunge", motionT: 0.48, durationMs: 120, hitFlash: 0, shake: 0, impactText: null },
+    { phase: "impact", motionT: 0.68, durationMs: 250, hitFlash: 1, shake: 1, impactText: true },
+    { phase: "recover", motionT: 0.86, durationMs: 160, hitFlash: 0, shake: 0.25, impactText: null },
+    { phase: "idle", motionT: 1, durationMs: 120, hitFlash: 0, shake: 0, impactText: null },
   ];
 
   const PHASE_LABELS = {
-    init: "初始化",
-    idle: "战斗观察",
-    windup: "蓄力",
-    attack: "出招",
-    lunge: "突进",
-    impact: "命中",
-    recover: "收招",
-    retry: "准备重试",
+    init: "等待开始",
+    idle: "等待技能冷却",
+    windup: "准备释放技能",
+    attack: "释放技能",
+    lunge: "技能飞向 Boss",
+    impact: "技能命中",
+    recover: "回合结束",
+    retry: "重新挑战 Boss",
     failed: "挑战失败",
   };
 
@@ -281,7 +281,13 @@
     if (!frame) return PHASE_LABELS.init;
     if (frame.failed) return PHASE_LABELS.failed;
     if (frame.retry) return PHASE_LABELS.retry;
-    if (frame.defeated && frame.phase === "idle") return "Boss 击破";
+    if (frame.defeated && frame.phase === "idle") return "Boss 已击败";
+    if (frame.skillIdx !== null) {
+      if (frame.phase === "windup") return `准备释放技能 S${frame.skillIdx}`;
+      if (frame.phase === "attack" || frame.phase === "lunge") return `释放技能 S${frame.skillIdx}`;
+      if (frame.phase === "impact") return `技能 S${frame.skillIdx} 命中`;
+      if (frame.phase === "recover") return `技能 S${frame.skillIdx} 结束`;
+    }
     return PHASE_LABELS[frame.phase] || "战斗中";
   }
 
@@ -439,7 +445,7 @@
     config.skills.slice(0, 6).forEach((skill, index) => {
       const item = document.createElement("div");
       item.className = "intro-skill-chip";
-      item.innerHTML = `<strong>S${index}</strong><span>${skill.damage} damage<br />cd ${skill.cooldown}</span>`;
+      item.innerHTML = `<strong>S${index}</strong><span>伤害 ${skill.damage}<br />冷却 ${skill.cooldown}</span>`;
       els.introSkillPreview.appendChild(item);
     });
 
@@ -487,6 +493,65 @@
       recover: 0.38,
       idle: 0.16,
     }[frame.phase] ?? 0.16;
+  }
+
+  function frameDelay(frame) {
+    if (!frame) return 140;
+    const speedFactor = 0.62 + Math.sqrt(Math.max(1, state.speed)) * 0.42;
+    const minimum = frame.phase === "impact"
+      ? 118
+      : frame.retry || frame.failed
+        ? 210
+        : frame.phase === "windup" || frame.phase === "recover"
+          ? 76
+          : 58;
+    return Math.max(minimum, frame.durationMs / speedFactor);
+  }
+
+  function skillColor(index, alpha = 1) {
+    const palette = [
+      [249, 115, 22],
+      [45, 212, 191],
+      [167, 139, 250],
+      [250, 204, 21],
+    ];
+    const [r, g, b] = palette[index % palette.length];
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function drawScanGrid(alpha = 0.08) {
+    ctx.save();
+    ctx.strokeStyle = `rgba(148, 163, 184, ${alpha})`;
+    ctx.lineWidth = 1;
+    for (let x = 72; x < 860; x += 38) {
+      ctx.beginPath();
+      ctx.moveTo(x, 90);
+      ctx.lineTo(x - 78, 620);
+      ctx.stroke();
+    }
+    for (let y = 122; y < 618; y += 42) {
+      ctx.beginPath();
+      ctx.moveTo(66, y);
+      ctx.lineTo(860, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawParticles(frame, bossAnchor) {
+    if (!state.showTrail || !frame || !["impact", "recover"].includes(frame.phase)) return;
+    const count = frame.phase === "impact" ? 18 : 10;
+    const baseAlpha = frame.phase === "impact" ? 0.86 : 0.42;
+    for (let i = 0; i < count; i += 1) {
+      const angle = (i / count) * Math.PI * 2 + frame.totalRound * 0.37;
+      const distance = 34 + (i % 5) * 13 + frame.hitFlash * 14;
+      const x = bossAnchor.x + Math.cos(angle) * distance;
+      const y = bossAnchor.y - 20 + Math.sin(angle) * distance * 0.72;
+      ctx.fillStyle = skillColor(frame.skillIdx ?? i, baseAlpha - (i % 4) * 0.1);
+      ctx.beginPath();
+      ctx.arc(x, y, 2.8 + (i % 3), 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   function withCanvasSpace(callback) {
@@ -538,23 +603,38 @@
 
   function drawBackground(frame) {
     const grad = ctx.createLinearGradient(0, 0, 0, 720);
-    grad.addColorStop(0, "#05060a");
-    grad.addColorStop(1, "#0b1220");
+    grad.addColorStop(0, "#030711");
+    grad.addColorStop(0.5, "#08111f");
+    grad.addColorStop(1, "#120816");
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 1280, 720);
 
     if (state.showGlow) {
       const leftGlow = ctx.createRadialGradient(240, 200, 20, 240, 200, 240);
-      leftGlow.addColorStop(0, "rgba(37, 99, 235, 0.24)");
+      leftGlow.addColorStop(0, "rgba(37, 99, 235, 0.34)");
       leftGlow.addColorStop(1, "rgba(37, 99, 235, 0)");
       ctx.fillStyle = leftGlow;
       ctx.fillRect(0, 0, 600, 500);
 
       const rightGlow = ctx.createRadialGradient(980, 180, 20, 980, 180, 280);
-      rightGlow.addColorStop(0, frame && frame.failed ? "rgba(239, 68, 68, 0.26)" : "rgba(220, 38, 38, 0.22)");
+      rightGlow.addColorStop(0, frame && frame.failed ? "rgba(239, 68, 68, 0.34)" : "rgba(220, 38, 38, 0.3)");
       rightGlow.addColorStop(1, "rgba(220, 38, 38, 0)");
       ctx.fillStyle = rightGlow;
       ctx.fillRect(700, 0, 580, 440);
+    }
+
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.05)";
+    ctx.lineWidth = 1;
+    for (let y = 44; y < 720; y += 44) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(1280, y);
+      ctx.stroke();
+    }
+
+    if (frame?.phase === "impact") {
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.06 + frame.hitFlash * 0.06})`;
+      ctx.fillRect(0, 0, 1280, 720);
     }
 
     if (state.mode === "damage") {
@@ -593,8 +673,8 @@
   }
 
   function drawArena(frame) {
-    drawRoundedRect(56, 72, 810, 566, 22, "#0b1220", "#334155", 2);
-    drawRoundedRect(900, 72, 324, 566, 18, "#0f172a", "#334155", 2);
+    drawRoundedRect(56, 72, 810, 566, 22, "rgba(7, 13, 28, 0.94)", "rgba(148, 163, 184, 0.34)", 2);
+    drawRoundedRect(900, 72, 324, 566, 18, "rgba(9, 14, 28, 0.94)", "rgba(148, 163, 184, 0.28)", 2);
 
     ctx.save();
     ctx.beginPath();
@@ -602,14 +682,7 @@
     ctx.clip();
 
     const pulse = state.showPulse && frame ? phaseEnergy(frame) : 0.08;
-    for (let i = 0; i < 14; i += 1) {
-      ctx.strokeStyle = `rgba(255,255,255,${0.02 + i * 0.003})`;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(110 + i * 46, 116);
-      ctx.lineTo(54 + i * 46, 620);
-      ctx.stroke();
-    }
+    drawScanGrid(0.035 + pulse * 0.024);
 
     ctx.fillStyle = "#020617";
     ctx.beginPath();
@@ -629,14 +702,22 @@
     ctx.ellipse(455, 538, 300, 24, 0, 0, Math.PI * 2);
     ctx.stroke();
 
-    ctx.fillStyle = "rgba(17, 24, 39, 0.88)";
+    ctx.fillStyle = "rgba(15, 23, 42, 0.88)";
     ctx.beginPath();
     ctx.ellipse(455, 534, 248, 16, 0, 0, Math.PI * 2);
     ctx.fill();
 
+    for (let i = 0; i < 3; i += 1) {
+      ctx.strokeStyle = `rgba(249, 115, 22, ${0.08 + pulse * 0.06 - i * 0.018})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(455, 536, 210 + i * 74, 28 + i * 10, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
     ctx.restore();
 
-    drawRoundedRect(925, 106, 274, 44, 10, "#111827", "#475569", 1.5);
+    drawRoundedRect(925, 106, 274, 44, 10, "rgba(15, 23, 42, 0.92)", "rgba(148, 163, 184, 0.36)", 1.5);
   }
 
   function drawRoundedRectPath(x, y, width, height, radius) {
@@ -981,21 +1062,80 @@
     ctx.fillRect(x + 3, y + height * 0.58, Math.max(0, width * clamped - 6), Math.max(2, height * 0.16));
   }
 
+  function drawInfoBox(x, y, width, label, value, edge) {
+    drawRoundedRect(x, y, width, 58, 12, "rgba(2, 6, 23, 0.82)", edge, 1.6);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.font = "800 13px sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, x + 16, y + 17);
+    ctx.fillStyle = "#f8fafc";
+    ctx.font = "900 20px sans-serif";
+    ctx.fillText(value, x + 16, y + 39);
+  }
+
+  function drawCommandDeck(frame) {
+    const baseX = 98;
+    const baseY = 590;
+    ctx.fillStyle = "rgba(2, 6, 23, 0.58)";
+    ctx.fillRect(82, 566, 590, 76);
+    ctx.fillStyle = "#cbd5e1";
+    ctx.font = "800 12px sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText("技能栏", baseX, baseY - 12);
+
+    frame.skills.slice(0, 5).forEach((skill, index) => {
+      const x = baseX + index * 108;
+      const active = frame.skillIdx === index && frame.damage > 0;
+      const ready = skill.remainingCd === 0;
+      const edge = active ? skillColor(index, 0.92) : ready ? "rgba(34, 197, 94, 0.46)" : "rgba(100, 116, 139, 0.38)";
+      const fill = active ? skillColor(index, 0.18) : ready ? "rgba(20, 83, 45, 0.42)" : "rgba(15, 23, 42, 0.9)";
+      drawRoundedRect(x, baseY, 92, 42, 9, fill, edge, active ? 2.4 : 1.2);
+      ctx.fillStyle = active ? "#fff7ed" : ready ? "#dcfce7" : "#cbd5e1";
+      ctx.font = "900 14px sans-serif";
+      ctx.fillText(`S${index}`, x + 10, baseY + 16);
+      ctx.font = "700 12px sans-serif";
+      ctx.fillStyle = ready ? "#f8fafc" : "#94a3b8";
+      ctx.fillText(`伤害 ${skill.damage}`, x + 10, baseY + 31);
+      if (!ready) {
+        ctx.fillStyle = "#94a3b8";
+        ctx.textAlign = "right";
+        ctx.fillText(`冷却 ${skill.remainingCd}`, x + 82, baseY + 16);
+        ctx.textAlign = "left";
+      }
+    });
+  }
+
   function drawArenaActors(frame) {
     const energy = phaseEnergy(frame);
-    const playerX = 120;
-    const playerY = 196;
+    const attackProgress = frame.damage > 0 ? phaseProgress(frame) : 0;
+    const lunge = frame.damage > 0 ? Math.sin(Math.min(1, attackProgress) * Math.PI) : 0;
+    const bossShake = frame.shake ? Math.sin(frame.totalRound * 2.1 + frame.motionT * 18) * 10 * frame.shake : 0;
+    const playerX = 120 + lunge * 54;
+    const playerY = 196 - (frame.phase === "lunge" ? 8 : 0);
     const playerW = 230;
     const playerH = 350;
     const bossW = 300;
     const bossH = 350;
-    const bossX = 506;
-    const bossY = 196 + (frame.defeated ? 8 : 0);
+    const bossX = 506 + bossShake;
+    const bossY = 196 + (frame.defeated ? 14 : 0);
     const playerAnchor = { x: playerX + 132, y: playerY + 178 };
     const bossAnchor = { x: bossX + 150, y: bossY + 168 };
 
-    drawGlow(playerX + 118, playerY + 178, 112, 96, "rgba(37, 99, 235, ALPHA)", 0.26 + energy * 0.08);
-    drawGlow(bossX + 150, bossY + 190, 150, 132, "rgba(220, 38, 38, ALPHA)", 0.2 + energy * 0.18);
+    drawGlow(playerX + 118, playerY + 178, 128, 104, "rgba(37, 99, 235, ALPHA)", 0.3 + energy * 0.12);
+    drawGlow(bossX + 150, bossY + 190, 172, 142, "rgba(220, 38, 38, ALPHA)", 0.25 + energy * 0.24);
+
+    drawInfoBox(82, 92, 310, "玩家", `金币 ${frame.coins}`, "rgba(56, 189, 248, 0.42)");
+    drawRoundedRect(536, 90, 270, 54, 12, "rgba(43, 10, 18, 0.72)", frame.defeated ? "rgba(34, 197, 94, 0.5)" : "rgba(251, 113, 133, 0.5)", 1.6);
+    ctx.fillStyle = "#ffe4e6";
+    ctx.font = "800 13px sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText("BOSS", 554, 108);
+    ctx.fillStyle = frame.defeated ? "#bbf7d0" : "#fecaca";
+    ctx.font = "900 18px sans-serif";
+    ctx.fillText(frame.defeated ? "已击败" : "状态未知", 554, 130);
 
     if (state.mode === "cooldown") {
       const readyCount = frame.skills.filter((skill) => skill.remainingCd === 0).length;
@@ -1032,6 +1172,8 @@
       ctx.fill();
     }
 
+    drawParticles(frame, bossAnchor);
+
     if (state.mode === "outcome" && (frame.failed || frame.retry || frame.defeated)) {
       const overlay = frame.failed
         ? "rgba(239, 68, 68, 0.18)"
@@ -1045,56 +1187,45 @@
     }
 
     drawSkillAnimation(frame, playerAnchor, bossAnchor);
+    drawCommandDeck(frame);
 
-    drawRoundedRect(88, 20, 154, 34, 9, "#0f172a", "#3b82f6", 1.5);
-    drawRoundedRect(582, 12, 258, 54, 10, "#2b0a12", "#fb7185", 1.5);
-    ctx.fillStyle = "#eff6ff";
-    ctx.font = "700 16px sans-serif";
-    ctx.textAlign = "center";
+    ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText("PLAYER", 165, 37);
-    ctx.fillStyle = "#ffe4e6";
-    ctx.font = "700 14px sans-serif";
-    ctx.fillText("DEMON SLIME", 711, 27);
-
-    ctx.textAlign = "left";
-    ctx.fillStyle = "#cbd5e1";
-    ctx.font = "500 16px sans-serif";
-    ctx.fillText(`Coins ${frame.coins}`, 108, 654);
-    ctx.fillText(`Action ${frame.skillIdx === null ? "WAIT" : `Skill ${frame.skillIdx}`}`, 288, 654);
-    ctx.fillStyle = "#fca5a5";
-    ctx.fillText(`Damage ${frame.damage}`, 546, 654);
-
-    ctx.fillStyle = "#f8fafc";
-    ctx.font = "600 13px sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("UNKNOWN TARGET STATUS", 604, 48);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.font = "800 13px sans-serif";
+    ctx.fillText(frame.skillIdx === null ? "当前动作：等待技能冷却" : `当前动作：释放技能 S${frame.skillIdx}`, 694, 602);
+    ctx.fillStyle = frame.damage > 0 ? "#fca5a5" : "#94a3b8";
+    ctx.fillText(`本次伤害：${frame.damage}`, 694, 626);
   }
 
   function drawSidePanel(frame) {
-    const status = frame.failed ? "Failed" : frame.retry ? "Retry" : frame.defeated ? "Boss Down" : "Fighting";
+    const status = frame.failed ? "挑战失败" : frame.retry ? "准备重试" : frame.defeated ? "Boss 已击败" : frame.skillIdx === null ? "等待冷却" : `释放技能 S${frame.skillIdx}`;
     const color = frame.failed ? "#ef4444" : frame.retry ? "#f59e0b" : frame.defeated ? "#22c55e" : "#60a5fa";
+    drawRoundedRect(924, 164, 278, 62, 12, "rgba(2, 6, 23, 0.62)", color, 1.6);
     ctx.fillStyle = "#f8fafc";
     ctx.font = "700 18px sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText("BATTLE FLOW", 948, 128);
+    ctx.fillText("当前战斗", 948, 128);
     ctx.textAlign = "center";
     ctx.fillStyle = color;
-    ctx.font = "700 24px sans-serif";
-    ctx.fillText(status, 1062, 182);
+    ctx.font = "900 23px sans-serif";
+    ctx.fillText(status, 1062, 184);
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "700 12px sans-serif";
+    ctx.fillText(frame.damage > 0 ? `造成 ${frame.damage} 伤害` : "本回合未造成伤害", 1062, 207);
 
     ctx.textAlign = "left";
     ctx.fillStyle = "#cbd5e1";
     ctx.font = "500 17px sans-serif";
-    ctx.fillText(`Attempt ${frame.attempt}`, 938, 238);
-    ctx.fillText(`Turn ${frame.attackRound}`, 1092, 238);
-    ctx.fillText(`Boss ${frame.bossIndex}/${frame.bossTotal}`, 938, 286);
+    ctx.fillText(`尝试 ${frame.attempt}`, 938, 262);
+    ctx.fillText(`回合 ${frame.attackRound}`, 1092, 262);
+    ctx.fillText(`Boss ${frame.bossIndex}/${frame.bossTotal}`, 938, 310);
     ctx.fillStyle = "#f8fafc";
     ctx.font = "700 18px sans-serif";
-    ctx.fillText("Skills", 938, 342);
+    ctx.fillText("技能冷却", 938, 356);
 
-    let skillY = 388;
+    let skillY = 400;
     frame.skills.forEach((skill, index) => {
       if (skillY > 584) return;
       const ready = skill.remainingCd === 0;
@@ -1110,9 +1241,9 @@
       ctx.font = "600 14px sans-serif";
       ctx.fillText(`S${index}`, 944, skillY - 1);
       ctx.fillStyle = "#cbd5e1";
-      ctx.fillText(`${skill.damage} dmg`, 990, skillY - 1);
+      ctx.fillText(`伤害 ${skill.damage}`, 990, skillY - 1);
       ctx.fillStyle = ready ? "#22c55e" : "#94a3b8";
-      ctx.fillText(`cd ${skill.remainingCd}/${skill.cooldown}`, 1092, skillY - 1);
+      ctx.fillText(ready ? "可用" : `冷却 ${skill.remainingCd}`, 1092, skillY - 1);
       const ratio = skill.cooldown === 0 ? 1 : (skill.cooldown - skill.remainingCd) / skill.cooldown;
       drawProgressBar(1094, skillY + 6, 98, 10, ratio, ready ? "#22c55e" : "#64748b", "#111827");
       skillY += 52;
@@ -1177,11 +1308,11 @@
       card.innerHTML = `
         <div class="skill-card-header">
           <strong>S${index}</strong>
-          <span class="skill-state ${skill.remainingCd === 0 ? "ready" : ""}">${skill.remainingCd === 0 ? "READY" : `CD ${skill.remainingCd}`}</span>
+          <span class="skill-state ${skill.remainingCd === 0 ? "ready" : ""}">${skill.remainingCd === 0 ? "可用" : `冷却 ${skill.remainingCd}`}</span>
         </div>
         <div class="skill-card-meta">
-          <span>${skill.damage} damage</span>
-          <span>cooldown ${skill.cooldown}</span>
+          <span>伤害 ${skill.damage}</span>
+          <span>冷却 ${skill.cooldown}</span>
         </div>
         <div class="skill-bar">
           <div class="skill-bar-fill" style="width:${Math.max(0, Math.min(100, ratio * 100))}%"></div>
@@ -1196,9 +1327,11 @@
       els.battleReadout.textContent = "等待战斗数据";
       return;
     }
-    const action = frame.skillIdx === null ? "WAIT" : `S${frame.skillIdx}`;
-    const suffix = frame.failed ? " / 失败" : frame.retry ? " / 重试" : frame.defeated ? " / 击破" : "";
-    els.battleReadout.textContent = `B${frame.bossIndex} · Attempt ${frame.attempt} · Turn ${frame.attackRound} · ${action}${suffix}`;
+    let action = frame.skillIdx === null ? "等待技能冷却" : `释放技能 S${frame.skillIdx}`;
+    if (frame.failed) action = "挑战失败";
+    else if (frame.retry) action = "准备重试";
+    else if (frame.defeated) action = "Boss 已击败";
+    els.battleReadout.textContent = `Boss ${frame.bossIndex} · 第 ${frame.attackRound} 回合 · ${action}`;
   }
 
   function updateUi() {
@@ -1218,9 +1351,9 @@
     els.detailBoss.textContent = `${frame.bossIndex} / ${frame.bossTotal}`;
     els.detailAttempt.textContent = String(frame.attempt);
     els.detailTurn.textContent = `${frame.attackRound} / ${frame.minRounds}`;
-    els.detailAction.textContent = frame.skillIdx === null ? "等待" : `技能 S${frame.skillIdx}`;
+    els.detailAction.textContent = frame.skillIdx === null ? "等待技能冷却" : `释放技能 S${frame.skillIdx}`;
     els.detailDamage.textContent = String(frame.damage);
-    els.detailBossHp.textContent = frame.defeated ? "已击破" : "未知";
+    els.detailBossHp.textContent = frame.failed ? "失败" : frame.retry ? "重试" : frame.defeated ? "已击败" : "未知";
     updateReadout(frame);
     renderEvents();
     renderSkills(frame);
@@ -1251,12 +1384,10 @@
   function scheduleTick() {
     if (!state.playing || !state.frames.length) return;
     const frame = currentFrame();
-    const baseDelay = Math.max(34, 680 / state.speed);
-    const frameDelay = frame ? Math.max(32, frame.durationMs / Math.max(1, state.speed * 0.36)) : baseDelay;
     state.timer = window.setTimeout(() => {
       setFrame(state.frameIndex + 1);
       scheduleTick();
-    }, Math.min(baseDelay, frameDelay));
+    }, frameDelay(frame));
   }
 
   function startPlayback() {

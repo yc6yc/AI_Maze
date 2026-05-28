@@ -38,6 +38,9 @@
             <span>开始探索</span>
             <span class="start-mark">›</span>
           </button>
+          <button id="introImportBtn" class="intro-import-btn" type="button">
+            导入 JSON 地图
+          </button>
         </div>
 
         <div class="intro-visual" aria-hidden="true">
@@ -159,6 +162,10 @@
         </div>
         <div class="canvas-frame">
           <canvas id="mazeCanvas" width="960" height="960" aria-label="迷宫可视化画布"></canvas>
+          <div id="emptyMapPrompt" class="empty-map-prompt">
+            <p>请选择一张地图导入以开始游戏</p>
+            <button id="emptyImportBtn" type="button" class="empty-import-btn">导入 JSON 地图</button>
+          </div>
         </div>
       </section>
 
@@ -192,6 +199,28 @@
         </section>
       </aside>
     </main>
+
+    <div id="bossAlert" class="boss-alert" hidden aria-hidden="true">
+      <div class="boss-alert-line" aria-hidden="true"></div>
+      <section class="boss-alert-card" aria-label="Boss 战提示">
+        <span class="boss-alert-kicker">BOSS WARNING</span>
+        <strong id="bossAlertTitle">进入 Boss 战</strong>
+        <span id="bossAlertMeta">战斗链接已建立</span>
+      </section>
+      <div class="boss-alert-line" aria-hidden="true"></div>
+    </div>
+
+    <div id="bossWinAlert" class="boss-win-alert" hidden aria-hidden="true">
+      <section class="boss-win-card" aria-label="Boss 胜利提示">
+        <div class="win-trophy-stage" aria-hidden="true">
+          <span class="win-trophy trophy-left"><span></span></span>
+          <span class="win-trophy trophy-center"><span></span></span>
+          <span class="win-trophy trophy-right"><span></span></span>
+        </div>
+        <strong class="boss-win-word">WIN</strong>
+        <span id="bossWinMeta" class="boss-win-meta">Boss 已击败</span>
+      </section>
+    </div>
 
     <div id="bossOverlay" class="boss-overlay" hidden aria-hidden="true">
       <div class="boss-overlay-backdrop"></div>

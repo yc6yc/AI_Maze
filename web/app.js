@@ -117,8 +117,11 @@
 
   const els = {
     canvas: document.getElementById("mazeCanvas"),
+    emptyMapPrompt: document.getElementById("emptyMapPrompt"),
+    emptyImportBtn: document.getElementById("emptyImportBtn"),
     introScreen: document.getElementById("introScreen"),
     startGameBtn: document.getElementById("startGameBtn"),
+    introImportBtn: document.getElementById("introImportBtn"),
     introSize: document.getElementById("introSize"),
     introRoute: document.getElementById("introRoute"),
     introBoss: document.getElementById("introBoss"),
@@ -151,6 +154,11 @@
     tileWeight: document.getElementById("tileWeight"),
     eventList: document.getElementById("eventList"),
     legendGrid: document.getElementById("legendGrid"),
+    bossAlert: document.getElementById("bossAlert"),
+    bossAlertTitle: document.getElementById("bossAlertTitle"),
+    bossAlertMeta: document.getElementById("bossAlertMeta"),
+    bossWinAlert: document.getElementById("bossWinAlert"),
+    bossWinMeta: document.getElementById("bossWinMeta"),
     bossOverlay: document.getElementById("bossOverlay"),
     bossOverlayTitle: document.getElementById("bossOverlayTitle"),
     bossOverlayFrame: document.getElementById("bossOverlayFrame"),
@@ -185,13 +193,13 @@
     bossFrameReady: false,
     pendingBossPayload: null,
     pendingBossOutcome: null,
+    bossAlertTimer: null,
+    bossOverlayCloseTimer: null,
+    bossWinAlertTimer: null,
     effectSheets: {},
     activeEffects: [],
     effectRafId: null,
-    effectTriggeredRounds: {
-      bossEnter: new Set(),
-      portalEnter: new Set(),
-    },
+    lastEffectFrameIndex: null,
     hiddenTraps: new Set(),
     trapHideTimers: new Map(),
     layout: {
@@ -235,9 +243,34 @@
       window.cancelAnimationFrame(state.effectRafId);
       state.effectRafId = null;
     }
-    state.effectTriggeredRounds.bossEnter.clear();
-    state.effectTriggeredRounds.portalEnter.clear();
+    state.lastEffectFrameIndex = null;
     state.pendingBossOutcome = null;
+  }
+
+  function clearBossAlert() {
+    if (state.bossAlertTimer) {
+      window.clearTimeout(state.bossAlertTimer);
+      state.bossAlertTimer = null;
+    }
+    els.bossAlert.classList.remove("is-visible");
+    els.bossAlert.hidden = true;
+    els.bossAlert.setAttribute("aria-hidden", "true");
+  }
+
+  function clearBossOverlayCloseTimer() {
+    if (!state.bossOverlayCloseTimer) return;
+    window.clearTimeout(state.bossOverlayCloseTimer);
+    state.bossOverlayCloseTimer = null;
+  }
+
+  function clearBossWinAlert() {
+    if (state.bossWinAlertTimer) {
+      window.clearTimeout(state.bossWinAlertTimer);
+      state.bossWinAlertTimer = null;
+    }
+    els.bossWinAlert.classList.remove("is-visible");
+    els.bossWinAlert.hidden = true;
+    els.bossWinAlert.setAttribute("aria-hidden", "true");
   }
 
   function scheduleTrapHide(frame) {
@@ -500,6 +533,11 @@
     state.bossBattleQueue = [];
     state.bossAutoResume = false;
     clearTrapHideState();
+    clearBossAlert();
+    clearBossOverlayCloseTimer();
+    clearBossWinAlert();
+    clearEffects();
+    if (els.emptyMapPrompt) els.emptyMapPrompt.hidden = true;
 
     els.mapName.textContent = name;
     els.timeline.max = String(Math.max(0, frames.length - 1));
@@ -563,6 +601,57 @@
     els.mapMeta.textContent += "（本地文件模式）";
   }
 
+  function initEmptyState() {
+    stopPlayback();
+    state.data = null;
+    state.grid = [];
+    state.frames = [];
+    state.route = [];
+    state.frameIndex = 0;
+    state.hovered = null;
+    state.selected = null;
+    state.bossBattleActive = false;
+    state.bossBattlePendingFrame = null;
+    state.bossBattleQueue = [];
+    state.bossAutoResume = false;
+    clearTrapHideState();
+    clearBossAlert();
+    clearBossOverlayCloseTimer();
+    clearBossWinAlert();
+    clearEffects();
+
+    document.body.classList.remove("intro-leaving");
+    document.body.classList.add("intro-active");
+    if (els.emptyMapPrompt) els.emptyMapPrompt.hidden = false;
+    els.startGameBtn.disabled = true;
+    els.introSize.textContent = "--";
+    els.introRoute.textContent = "--";
+    els.introBoss.textContent = "--";
+    els.introMiniMap.innerHTML = "";
+    els.introMeta.textContent = "请先导入地图";
+    els.mapName.textContent = "未导入地图";
+    els.runState.textContent = "等待导入";
+    els.metricRound.textContent = "0";
+    els.metricCoins.textContent = "0";
+    els.metricExplored.textContent = "0%";
+    els.metricRoute.textContent = "0";
+    els.phaseLabel.textContent = "等待导入地图";
+    els.cellReadout.textContent = "请选择地图文件";
+    els.timeline.max = "0";
+    els.timeline.value = "0";
+    els.mapMeta.textContent = "请选择一张 JSON 地图导入以开始游戏。";
+    try {
+      window.localStorage.removeItem(ACTIVE_MAP_CACHE_KEY);
+    } catch (error) {
+      console.warn("Failed to clear active map cache.", error);
+    }
+    updateTileInfo(null);
+    els.cellReadout.textContent = "请选择地图文件";
+    renderEvents();
+    fitCanvas();
+    draw();
+  }
+
   function loadAssets() {
     Object.entries(OBJECT_ASSETS).forEach(([name, src]) => {
       const image = new Image();
@@ -606,6 +695,7 @@
       scale,
       done: false,
     });
+    draw();
     if (!state.effectRafId) {
       animateEffects();
     }
@@ -718,7 +808,7 @@
     ctx.clearRect(0, 0, state.layout.width, state.layout.height);
 
     if (!state.grid.length) {
-      drawEmptyState("等待地图数据");
+      drawEmptyState("请选择一张地图导入以开始游戏");
       return;
     }
 
@@ -760,7 +850,7 @@
       for (let c = 0; c < cols; c += 1) {
         const revealed = shouldReveal(frame, r, c);
         const trapHidden = state.hiddenTraps.has(`${r},${c}`);
-        const cell = revealed && !trapHidden ? visibleGrid[r][c] : null;
+        const cell = revealed ? (trapHidden ? " " : visibleGrid[r][c]) : null;
         drawTile(r, c, cell, frame);
       }
     }
@@ -1021,11 +1111,19 @@
   }
 
   function setFrame(index) {
-    state.frameIndex = Math.max(0, Math.min(index, state.frames.length - 1));
+    const previousFrameIndex = state.frameIndex;
+    const nextFrameIndex = Math.max(0, Math.min(index, state.frames.length - 1));
+    if (nextFrameIndex < previousFrameIndex) {
+      state.bossBattleQueue = state.bossBattleQueue.filter((frameIndex) => frameIndex < nextFrameIndex);
+      state.pendingBossOutcome = null;
+      clearBossAlert();
+      clearBossWinAlert();
+    }
+    state.frameIndex = nextFrameIndex;
     if (state.frameIndex >= state.frames.length - 1) stopPlayback();
     updateUi();
     draw();
-    triggerFrameEffects(currentFrame());
+    triggerFrameEffects(currentFrame(), previousFrameIndex);
     scheduleTrapHide(currentFrame());
     maybeTriggerBossBattle();
   }
@@ -1038,6 +1136,9 @@
     state.bossBattleQueue = [];
     state.bossBattlePendingFrame = null;
     state.bossAutoResume = false;
+    clearBossAlert();
+    clearBossOverlayCloseTimer();
+    clearBossWinAlert();
     clearTrapHideState();
     clearEffects();
   }
@@ -1118,8 +1219,62 @@
     win.postMessage({ type: "maze-start-boss-battle", payload }, "*");
   }
 
+  function showBossAlert(frame) {
+    const bossIndex = frame?.bossEncounter?.bossIndex ?? 1;
+    const bossTotal = frame?.bossEncounter?.bossTotal ?? 1;
+    els.bossAlertTitle.textContent = "进入 Boss 战";
+    els.bossAlertMeta.textContent = `Boss ${bossIndex} / ${bossTotal}`;
+    els.bossAlert.hidden = false;
+    els.bossAlert.setAttribute("aria-hidden", "false");
+    els.bossAlert.classList.remove("is-visible");
+    void els.bossAlert.offsetWidth;
+    els.bossAlert.classList.add("is-visible");
+  }
+
+  function queueBossOverlay(frame) {
+    if (!frame || !frame.bossEncounter) return;
+    stopPlayback();
+    showBossAlert(frame);
+    if (state.bossAlertTimer) {
+      window.clearTimeout(state.bossAlertTimer);
+    }
+    state.bossAlertTimer = window.setTimeout(() => {
+      state.bossAlertTimer = null;
+      clearBossAlert();
+      const latest = currentFrame();
+      if (latest?.bossEncounter && latest.round === frame.round) {
+        openBossOverlay(latest);
+      }
+    }, 880);
+  }
+
+  function playPendingBossOutcomeEffect() {
+    if (!state.pendingBossOutcome) return;
+    const outcome = state.pendingBossOutcome;
+    state.pendingBossOutcome = null;
+    const frame = state.frames[outcome.frameIndex] || currentFrame();
+    if (!frame?.pos) return;
+    spawnEffect(outcome.result === "win" ? "boss_win" : "boss_lose", frame.pos, 1.62, 58);
+    if (outcome.result === "win") {
+      showBossWinAlert(outcome);
+    }
+  }
+
+  function showBossWinAlert(outcome) {
+    clearBossWinAlert();
+    els.bossWinMeta.textContent = outcome.bossIndex ? `Boss ${outcome.bossIndex} 已击败` : "Boss 已击败";
+    els.bossWinAlert.hidden = false;
+    els.bossWinAlert.setAttribute("aria-hidden", "false");
+    void els.bossWinAlert.offsetWidth;
+    els.bossWinAlert.classList.add("is-visible");
+    state.bossWinAlertTimer = window.setTimeout(() => {
+      clearBossWinAlert();
+    }, 2100);
+  }
+
   function openBossOverlay(frame) {
     if (!frame || !frame.bossEncounter || state.bossBattleActive) return;
+    clearBossAlert();
     const payload = buildBossBattlePayload(frame);
     state.bossBattleActive = true;
     state.bossBattlePendingFrame = state.frameIndex;
@@ -1139,27 +1294,27 @@
 
   function closeBossOverlay(resumePlayback = true) {
     if (!state.bossBattleActive && els.bossOverlay.hidden) return;
+    clearBossOverlayCloseTimer();
+    const shouldResume = resumePlayback && state.bossAutoResume && state.frameIndex < state.frames.length - 1;
     state.bossBattleActive = false;
     state.bossBattlePendingFrame = null;
     els.bossOverlay.hidden = true;
     els.bossOverlay.setAttribute("aria-hidden", "true");
     document.body.classList.remove("overlay-open");
-    if (resumePlayback && state.bossAutoResume && state.frameIndex < state.frames.length - 1) {
-      startPlayback();
-    } else {
-      updateUi();
-      draw();
-    }
+    updateUi();
+    draw();
     scheduleTrapHide(currentFrame());
+    playPendingBossOutcomeEffect();
     state.bossAutoResume = false;
+    if (shouldResume) startPlayback();
   }
 
   function maybeTriggerBossBattle() {
     const frame = currentFrame();
-    if (!frame?.bossEncounter || state.bossBattleActive) return;
+    if (!frame?.bossEncounter || state.bossBattleActive || state.bossAlertTimer) return;
     if (state.bossBattleQueue.includes(state.frameIndex)) return;
     state.bossBattleQueue.push(state.frameIndex);
-    openBossOverlay(frame);
+    queueBossOverlay(frame);
   }
 
   function handleBossOverlayMessage(event) {
@@ -1177,22 +1332,29 @@
     if (data.type !== "maze-boss-complete") return;
     if (!state.bossBattleActive) return;
     const frame = currentFrame();
-    if (frame?.pos) {
-      spawnEffect(data.result === 1 ? "boss_win" : "boss_lose", frame.pos, 1.52, 58);
-    }
     const status = data.result === 1 ? "已结束（胜利）" : "已结束（失败）";
     els.bossOverlayTitle.textContent = `Boss ${data.bossIndex ?? ""} 战斗${status}`;
-    state.pendingBossOutcome = data.result === 1 ? "win" : "lose";
+    state.pendingBossOutcome = {
+      result: data.result === 1 ? "win" : "lose",
+      frameIndex: state.bossBattlePendingFrame ?? state.frameIndex,
+      bossIndex: data.bossIndex ?? frame?.bossEncounter?.bossIndex ?? 1,
+      pos: frame?.pos ? { ...frame.pos } : null,
+    };
+    clearBossOverlayCloseTimer();
+    state.bossOverlayCloseTimer = window.setTimeout(() => {
+      state.bossOverlayCloseTimer = null;
+      closeBossOverlay(true);
+    }, 900);
   }
 
-  function triggerFrameEffects(frame) {
+  function triggerFrameEffects(frame, previousFrameIndex) {
     if (!frame) return;
-    if (frame.bossEncounter && !state.effectTriggeredRounds.bossEnter.has(frame.round)) {
-      state.effectTriggeredRounds.bossEnter.add(frame.round);
+    if (state.lastEffectFrameIndex === state.frameIndex && previousFrameIndex === state.frameIndex) return;
+    state.lastEffectFrameIndex = state.frameIndex;
+    if (frame.bossEncounter) {
       spawnEffect("boss_enter", frame.pos, 1.48, 58);
     }
-    if (frame.sourceCell === "E" && !state.effectTriggeredRounds.portalEnter.has(frame.round)) {
-      state.effectTriggeredRounds.portalEnter.add(frame.round);
+    if (frame.sourceCell === "E") {
       spawnEffect("portal_enter", frame.pos, 1.48, 58);
     }
   }
@@ -1209,6 +1371,10 @@
     }, 560);
   }
 
+  function openMapImporter() {
+    els.fileInput.click();
+  }
+
   function canvasToCell(event) {
     const rect = els.canvas.getBoundingClientRect();
     const x = (event.clientX - rect.left) * state.layout.dpr;
@@ -1223,6 +1389,8 @@
   function bindEvents() {
     els.startGameBtn.disabled = true;
     els.startGameBtn.addEventListener("click", enterMaze);
+    els.emptyImportBtn.addEventListener("click", openMapImporter);
+    els.introImportBtn.addEventListener("click", openMapImporter);
 
     els.playBtn.addEventListener("click", togglePlayback);
     els.resetBtn.addEventListener("click", reset);
@@ -1317,6 +1485,6 @@
   loadAssets();
   renderLegend();
   bindEvents();
+  initEmptyState();
   ensureBossFrameLoaded();
-  loadDefaultMap();
 })();
