@@ -108,6 +108,12 @@
     floor: "../viz/assets/floor.png",
     wall: "../viz/assets/wall.png",
   };
+  const EFFECT_SHEETS = {
+    boss_enter: "../viz/assets/effects/boss_enter_effect_sheet.png",
+    boss_win: "../viz/assets/effects/boss_win_effect_sheet.png",
+    boss_lose: "../viz/assets/effects/boss_lose_effect_sheet.png",
+    portal_enter: "../viz/assets/effects/portal_enter_effect_sheet.png",
+  };
 
   const els = {
     canvas: document.getElementById("mazeCanvas"),
@@ -178,6 +184,14 @@
     bossFrameLoaded: false,
     bossFrameReady: false,
     pendingBossPayload: null,
+    pendingBossOutcome: null,
+    effectSheets: {},
+    activeEffects: [],
+    effectRafId: null,
+    effectTriggeredRounds: {
+      bossEnter: new Set(),
+      portalEnter: new Set(),
+    },
     hiddenTraps: new Set(),
     trapHideTimers: new Map(),
     layout: {
@@ -213,6 +227,17 @@
     });
     state.trapHideTimers.clear();
     state.hiddenTraps.clear();
+  }
+
+  function clearEffects() {
+    state.activeEffects = [];
+    if (state.effectRafId) {
+      window.cancelAnimationFrame(state.effectRafId);
+      state.effectRafId = null;
+    }
+    state.effectTriggeredRounds.bossEnter.clear();
+    state.effectTriggeredRounds.portalEnter.clear();
+    state.pendingBossOutcome = null;
   }
 
   function scheduleTrapHide(frame) {
@@ -548,6 +573,72 @@
       image.src = src;
       state.assets[name] = image;
     });
+
+    Object.entries(EFFECT_SHEETS).forEach(([name, src]) => {
+      const image = new Image();
+      image.onload = () => draw();
+      image.onerror = () => {
+        state.effectSheets[name] = null;
+      };
+      image.src = src;
+      state.effectSheets[name] = image;
+    });
+  }
+
+  function effectFrames(sheet) {
+    if (!sheet || !sheet.naturalWidth || !sheet.naturalHeight) return 0;
+    return Math.max(1, Math.floor(sheet.naturalWidth / sheet.naturalHeight));
+  }
+
+  function spawnEffect(effectName, pos, scale = 1.42, frameMs = 60) {
+    const sheet = state.effectSheets[effectName];
+    if (!sheet || !sheet.complete || !sheet.naturalWidth || !sheet.naturalHeight) return;
+    const frames = effectFrames(sheet);
+    if (!frames) return;
+    state.activeEffects.push({
+      effectName,
+      pos: { ...pos },
+      frameIndex: 0,
+      startedAt: performance.now(),
+      lastAt: performance.now(),
+      frameMs,
+      frames,
+      scale,
+      done: false,
+    });
+    if (!state.effectRafId) {
+      animateEffects();
+    }
+  }
+
+  function animateEffects() {
+    if (!state.activeEffects.length) {
+      state.effectRafId = null;
+      return;
+    }
+    const now = performance.now();
+    let changed = false;
+    state.activeEffects.forEach((effect) => {
+      if (effect.done) return;
+      if (now - effect.lastAt < effect.frameMs) return;
+      effect.lastAt = now;
+      effect.frameIndex += 1;
+      changed = true;
+      if (effect.frameIndex >= effect.frames) {
+        effect.done = true;
+      }
+    });
+    const before = state.activeEffects.length;
+    state.activeEffects = state.activeEffects.filter((effect) => !effect.done);
+    if (changed || state.activeEffects.length !== before) {
+      draw();
+      updateUi();
+    }
+    if (state.activeEffects.length) {
+      state.effectRafId = window.requestAnimationFrame(animateEffects);
+    } else {
+      state.effectRafId = null;
+    }
   }
 
   function updateIntroScreen(data, route, name) {
@@ -636,6 +727,7 @@
     drawCells(frame);
     if (state.showPath && state.route.length > 1) drawPath(frame);
     drawFocus(frame);
+    drawEffects(frame);
     drawHover();
   }
 
@@ -827,6 +919,21 @@
     ctx.strokeRect(x + 2, y + 2, tile - 4, tile - 4);
   }
 
+  function drawEffects(frame) {
+    if (!frame || !state.activeEffects.length) return;
+    const { originX, originY, tile } = state.layout;
+    state.activeEffects.forEach((effect) => {
+      const sheet = state.effectSheets[effect.effectName];
+      if (!sheet || !sheet.complete || !sheet.naturalWidth || !sheet.naturalHeight) return;
+      const side = sheet.naturalHeight;
+      const sx = Math.min(effect.frameIndex, effect.frames - 1) * side;
+      const size = tile * effect.scale;
+      const dx = originX + effect.pos.c * tile + (tile - size) / 2;
+      const dy = originY + effect.pos.r * tile + (tile - size) / 2;
+      ctx.drawImage(sheet, sx, 0, side, side, dx, dy, size, size);
+    });
+  }
+
   function updateUi() {
     const frame = currentFrame();
     const routeLength = Math.max(0, state.route.length - 1);
@@ -918,6 +1025,7 @@
     if (state.frameIndex >= state.frames.length - 1) stopPlayback();
     updateUi();
     draw();
+    triggerFrameEffects(currentFrame());
     scheduleTrapHide(currentFrame());
     maybeTriggerBossBattle();
   }
@@ -931,6 +1039,7 @@
     state.bossBattlePendingFrame = null;
     state.bossAutoResume = false;
     clearTrapHideState();
+    clearEffects();
   }
 
   function startPlayback() {
@@ -1067,8 +1176,25 @@
     }
     if (data.type !== "maze-boss-complete") return;
     if (!state.bossBattleActive) return;
+    const frame = currentFrame();
+    if (frame?.pos) {
+      spawnEffect(data.result === 1 ? "boss_win" : "boss_lose", frame.pos, 1.52, 58);
+    }
     const status = data.result === 1 ? "已结束（胜利）" : "已结束（失败）";
     els.bossOverlayTitle.textContent = `Boss ${data.bossIndex ?? ""} 战斗${status}`;
+    state.pendingBossOutcome = data.result === 1 ? "win" : "lose";
+  }
+
+  function triggerFrameEffects(frame) {
+    if (!frame) return;
+    if (frame.bossEncounter && !state.effectTriggeredRounds.bossEnter.has(frame.round)) {
+      state.effectTriggeredRounds.bossEnter.add(frame.round);
+      spawnEffect("boss_enter", frame.pos, 1.48, 58);
+    }
+    if (frame.sourceCell === "E" && !state.effectTriggeredRounds.portalEnter.has(frame.round)) {
+      state.effectTriggeredRounds.portalEnter.add(frame.round);
+      spawnEffect("portal_enter", frame.pos, 1.48, 58);
+    }
   }
 
   function enterMaze() {
