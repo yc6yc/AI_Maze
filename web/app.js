@@ -1,5 +1,10 @@
 (() => {
-  const DEFAULT_MAP_URL = "../maze_15_15.json";
+  const DEFAULT_MAP_CANDIDATES = [
+    "../map地图/maze_15_15.json",
+    "../map/maze_15_15.json",
+    "../maze_15_15.json",
+  ];
+  const ACTIVE_MAP_CACHE_KEY = "ai_maze_active_map";
   const DEFAULT_MAP_DATA = {
     maze: [
       ["#","#","#","#","#","#","#","#","#","#","#","S","#","#","#"],
@@ -26,6 +31,7 @@
   const VIEW_RADIUS = 1;
   const COIN_VALUE = 50;
   const TRAP_DAMAGE = 30;
+  const TRAP_HIDE_DELAY_MS = 1000;
 
   const TILE = {
     "#": {
@@ -169,6 +175,11 @@
     bossBattleQueue: [],
     bossBattleRequestId: 0,
     bossAutoResume: false,
+    bossFrameLoaded: false,
+    bossFrameReady: false,
+    pendingBossPayload: null,
+    hiddenTraps: new Set(),
+    trapHideTimers: new Map(),
     layout: {
       dpr: 1,
       width: 0,
@@ -194,6 +205,27 @@
 
   function cloneData(data) {
     return JSON.parse(JSON.stringify(data));
+  }
+
+  function clearTrapHideState() {
+    state.trapHideTimers.forEach((timerId) => {
+      window.clearTimeout(timerId);
+    });
+    state.trapHideTimers.clear();
+    state.hiddenTraps.clear();
+  }
+
+  function scheduleTrapHide(frame) {
+    if (!frame || frame.round <= 0 || frame.sourceCell !== "T") return;
+    const trapKey = keyOf(frame.pos);
+    if (state.hiddenTraps.has(trapKey) || state.trapHideTimers.has(trapKey)) return;
+    const timerId = window.setTimeout(() => {
+      state.hiddenTraps.add(trapKey);
+      state.trapHideTimers.delete(trapKey);
+      draw();
+      updateUi();
+    }, TRAP_HIDE_DELAY_MS);
+    state.trapHideTimers.set(trapKey, timerId);
   }
 
   function inBounds(grid, r, c) {
@@ -390,6 +422,7 @@
       } else if (index > 0 && currentCell === "T" && !triggered.has(keyOf(pos))) {
         coins -= TRAP_DAMAGE;
         triggered.add(keyOf(pos));
+        mutable[pos.r][pos.c] = " ";
         event = `触发陷阱，金币 -${TRAP_DAMAGE}`;
         phase = "风险处理";
       } else if (index > 0 && currentCell === "B") {
@@ -441,6 +474,7 @@
     state.bossBattlePendingFrame = null;
     state.bossBattleQueue = [];
     state.bossAutoResume = false;
+    clearTrapHideState();
 
     els.mapName.textContent = name;
     els.timeline.max = String(Math.max(0, frames.length - 1));
@@ -448,6 +482,18 @@
     els.metricRoute.textContent = route.length ? String(route.length - 1) : "0";
     els.mapMeta.textContent = `${data.maze.length} x ${data.maze[0].length}，Boss ${Array.isArray(data.B) ? data.B.length : 0} 个，技能 ${Array.isArray(data.PlayerSkills) ? data.PlayerSkills.length : 0} 个`;
     updateIntroScreen(data, route, name);
+    try {
+      window.localStorage.setItem(
+        ACTIVE_MAP_CACHE_KEY,
+        JSON.stringify({
+          name,
+          data,
+          updatedAt: Date.now(),
+        })
+      );
+    } catch (error) {
+      console.warn("Failed to cache active map for boss page sync.", error);
+    }
 
     updateUi();
     fitCanvas();
@@ -474,16 +520,22 @@
       return;
     }
 
-    try {
-      const response = await fetch(DEFAULT_MAP_URL, { cache: "no-store" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      initMap(data);
-    } catch (error) {
-      console.warn("Default map file could not be loaded; using embedded map.", error);
-      initMap(JSON.parse(JSON.stringify(DEFAULT_MAP_DATA)), "内置示例地图");
-      els.mapMeta.textContent += "（本地文件模式）";
+    for (const url of DEFAULT_MAP_CANDIDATES) {
+      try {
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) continue;
+        const data = await response.json();
+        const mapName = url.split("/").pop() || "maze_15_15.json";
+        initMap(data, mapName);
+        return;
+      } catch (error) {
+        console.warn(`Map candidate failed: ${url}`, error);
+      }
     }
+
+    console.warn("Default map file could not be loaded; using embedded map.");
+    initMap(JSON.parse(JSON.stringify(DEFAULT_MAP_DATA)), "内置示例地图");
+    els.mapMeta.textContent += "（本地文件模式）";
   }
 
   function loadAssets() {
@@ -615,7 +667,8 @@
     for (let r = 0; r < rows; r += 1) {
       for (let c = 0; c < cols; c += 1) {
         const revealed = shouldReveal(frame, r, c);
-        const cell = revealed ? visibleGrid[r][c] : null;
+        const trapHidden = state.hiddenTraps.has(`${r},${c}`);
+        const cell = revealed && !trapHidden ? visibleGrid[r][c] : null;
         drawTile(r, c, cell, frame);
       }
     }
@@ -865,11 +918,19 @@
     if (state.frameIndex >= state.frames.length - 1) stopPlayback();
     updateUi();
     draw();
+    scheduleTrapHide(currentFrame());
     maybeTriggerBossBattle();
   }
 
   function step(delta) {
     setFrame(state.frameIndex + delta);
+  }
+
+  function resetBossBattleReplayState() {
+    state.bossBattleQueue = [];
+    state.bossBattlePendingFrame = null;
+    state.bossAutoResume = false;
+    clearTrapHideState();
   }
 
   function startPlayback() {
@@ -892,7 +953,10 @@
     if (state.bossBattleActive) return;
     if (state.playing) stopPlayback();
     else {
-      if (state.frameIndex >= state.frames.length - 1) setFrame(0);
+      if (state.frameIndex >= state.frames.length - 1) {
+        resetBossBattleReplayState();
+        setFrame(0);
+      }
       startPlayback();
     }
     updateUi();
@@ -909,6 +973,7 @@
   function reset() {
     stopPlayback();
     closeBossOverlay(false);
+    resetBossBattleReplayState();
     setFrame(0);
   }
 
@@ -918,6 +983,7 @@
     return {
       requestId: `boss-${Date.now()}-${state.bossBattleRequestId += 1}`,
       mapName: `${els.mapName.textContent || "maze_15_15.json"} / Boss ${bossIndex}`,
+      mapData: cloneData(state.data || {}),
       startingCoins: frame?.coins ?? 0,
       PlayerSkills: cloneData(state.data?.PlayerSkills || []),
       B: Number.isFinite(Number(bossHp)) ? [Number(bossHp)] : [1],
@@ -926,6 +992,21 @@
       bossIndex,
       bossTotal: frame?.bossEncounter?.bossTotal ?? 1,
     };
+  }
+
+  function ensureBossFrameLoaded() {
+    if (state.bossFrameLoaded) return;
+    state.bossFrameLoaded = true;
+    els.bossOverlayFrame.src = "./boss.html?embed=1";
+  }
+
+  function dispatchBossBattle(payload) {
+    const win = els.bossOverlayFrame.contentWindow;
+    if (!win) {
+      state.pendingBossPayload = payload;
+      return;
+    }
+    win.postMessage({ type: "maze-start-boss-battle", payload }, "*");
   }
 
   function openBossOverlay(frame) {
@@ -939,8 +1020,12 @@
     els.bossOverlay.hidden = false;
     els.bossOverlay.setAttribute("aria-hidden", "false");
     els.bossOverlayTitle.textContent = `Boss ${payload.bossIndex} 战斗中`;
-    const encoded = encodeURIComponent(JSON.stringify(payload));
-    els.bossOverlayFrame.src = `./boss.html?battle=${encoded}`;
+    ensureBossFrameLoaded();
+    if (state.bossFrameReady) {
+      dispatchBossBattle(payload);
+    } else {
+      state.pendingBossPayload = payload;
+    }
   }
 
   function closeBossOverlay(resumePlayback = true) {
@@ -949,7 +1034,6 @@
     state.bossBattlePendingFrame = null;
     els.bossOverlay.hidden = true;
     els.bossOverlay.setAttribute("aria-hidden", "true");
-    els.bossOverlayFrame.src = "about:blank";
     document.body.classList.remove("overlay-open");
     if (resumePlayback && state.bossAutoResume && state.frameIndex < state.frames.length - 1) {
       startPlayback();
@@ -957,6 +1041,7 @@
       updateUi();
       draw();
     }
+    scheduleTrapHide(currentFrame());
     state.bossAutoResume = false;
   }
 
@@ -970,14 +1055,26 @@
 
   function handleBossOverlayMessage(event) {
     const data = event?.data;
-    if (!data || data.type !== "maze-boss-complete") return;
+    if (!data) return;
+    if (data.type === "maze-boss-ready") {
+      state.bossFrameReady = true;
+      if (state.pendingBossPayload) {
+        const payload = state.pendingBossPayload;
+        state.pendingBossPayload = null;
+        dispatchBossBattle(payload);
+      }
+      return;
+    }
+    if (data.type !== "maze-boss-complete") return;
     if (!state.bossBattleActive) return;
-    closeBossOverlay(true);
+    const status = data.result === 1 ? "已结束（胜利）" : "已结束（失败）";
+    els.bossOverlayTitle.textContent = `Boss ${data.bossIndex ?? ""} 战斗${status}`;
   }
 
   function enterMaze() {
     if (!state.frames.length || document.body.classList.contains("intro-leaving")) return;
     els.startGameBtn.disabled = true;
+    resetBossBattleReplayState();
     setFrame(0);
     document.body.classList.add("intro-leaving");
     window.setTimeout(() => {
@@ -1094,5 +1191,6 @@
   loadAssets();
   renderLegend();
   bindEvents();
+  ensureBossFrameLoaded();
   loadDefaultMap();
 })();

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from agents.composite_agent import CompositeAgent
 from eval.simulator import LocalSimulator
+from map_loader import resolve_map_path
 from main import load_config
 from viz.boss_battle_visualizer import DEFAULT_BOSS_BATTLE_FPS, make_visual_boss_battle_handler
 
@@ -45,7 +46,8 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    run_sim_with_boss_window(str(Path(args.map)), cfg, max_rounds=args.rounds, fps=args.fps)
+    map_path = resolve_map_path(str(Path(args.map)))
+    run_sim_with_boss_window(map_path, cfg, max_rounds=args.rounds, fps=args.fps)
 
 
 if __name__ == "__main__":

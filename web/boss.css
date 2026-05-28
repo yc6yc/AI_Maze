@@ -3,6 +3,7 @@
     linear-gradient(140deg, rgba(15, 139, 141, 0.08), transparent 34%),
     linear-gradient(320deg, rgba(228, 87, 46, 0.1), transparent 30%),
     #f5f7fb;
+  overflow-y: auto;
 }
 
 .boss-page:not(.intro-active) .intro-screen {
@@ -19,6 +20,14 @@
 
 .boss-shell {
   grid-template-columns: minmax(260px, 320px) minmax(540px, 1fr) minmax(300px, 360px);
+  min-height: 100vh;
+  align-items: start;
+}
+
+.boss-shell .control-panel,
+.boss-shell .insight-panel {
+  max-height: calc(100vh - 36px);
+  overflow: auto;
 }
 
 .boss-intro-content {

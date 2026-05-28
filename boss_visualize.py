@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from core.state import GameContext, MazeState, PlayerState, Skill
+from map_loader import resolve_map_path
 from viz.boss_battle_visualizer import (
     DEFAULT_BOSS_BATTLE_FPS,
     render_boss_battle_window,
@@ -60,7 +61,7 @@ def main():
     parser.add_argument("--gif-path", default="boss_battle.gif")
     args = parser.parse_args()
 
-    map_path = str(Path(args.map))
+    map_path = resolve_map_path(str(Path(args.map)))
     ctx, boss_hps = build_boss_demo_context(map_path)
     frames = simulate_boss_battle_frames(ctx, boss_hps)
 

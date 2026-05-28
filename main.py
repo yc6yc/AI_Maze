@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from agents.composite_agent import CompositeAgent
 from eval.simulator import LocalSimulator
+from map_loader import resolve_map_path
 
 
 def load_config(path: str = "config.json") -> dict:
@@ -98,11 +99,12 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    map_path = resolve_map_path(args.map)
 
     if args.mode == "sim":
-        run_sim(args.map, cfg, args.rounds, args.visualize, args.visualize_window)
+        run_sim(map_path, cfg, args.rounds, args.visualize, args.visualize_window)
     elif args.mode == "eval":
-        run_eval(args.map, cfg, args.runs, args.rounds)
+        run_eval(map_path, cfg, args.runs, args.rounds)
     elif args.mode == "online":
         run_online(args.url, cfg)
 

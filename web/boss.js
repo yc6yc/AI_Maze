@@ -1,5 +1,10 @@
 (() => {
-  const DEFAULT_MAP_URL = "../maze_15_15.json";
+  const DEFAULT_MAP_CANDIDATES = [
+    "../map地图/maze_15_15.json",
+    "../map/maze_15_15.json",
+    "../maze_15_15.json",
+  ];
+  const ACTIVE_MAP_CACHE_KEY = "ai_maze_active_map";
   const DEFAULT_MAP_DATA = {
     maze: [
       ["#", "#", "#", "#", "#", "#", "#", "#", "#", "#", "#", "S", "#", "#", "#"],
@@ -129,6 +134,9 @@
 
   function parseBattleQuery() {
     const params = new URLSearchParams(window.location.search);
+    if (params.get("embed") === "1") {
+      return { __embedHost: true };
+    }
     const payload = params.get("battle");
     if (!payload) return null;
     try {
@@ -141,6 +149,15 @@
   }
 
   function buildBattleConfigFromPayload(payload) {
+    const sharedMap = payload?.mapData;
+    if (sharedMap && Array.isArray(sharedMap.PlayerSkills) && Array.isArray(sharedMap.B)) {
+      return {
+        B: sharedMap.B,
+        PlayerSkills: sharedMap.PlayerSkills,
+        minRouds: sharedMap.minRouds ?? sharedMap.minRounds,
+        CoinConsumption: sharedMap.CoinConsumption ?? sharedMap.coinConsumption,
+      };
+    }
     if (!payload || !Array.isArray(payload.PlayerSkills) || !Array.isArray(payload.B)) {
       throw new Error("战斗参数缺失");
     }
@@ -150,6 +167,23 @@
       minRouds: payload.minRouds ?? payload.minRounds,
       CoinConsumption: payload.CoinConsumption ?? payload.coinConsumption,
     };
+  }
+
+  function loadCachedActiveMap() {
+    try {
+      const raw = window.localStorage.getItem(ACTIVE_MAP_CACHE_KEY);
+      if (!raw) return null;
+      const cached = JSON.parse(raw);
+      if (!cached || typeof cached !== "object") return null;
+      if (!cached.data || !Array.isArray(cached.data.B) || !Array.isArray(cached.data.PlayerSkills)) return null;
+      return {
+        data: cached.data,
+        name: cached.name || "当前迷宫地图",
+      };
+    } catch (error) {
+      console.warn("Failed to read cached active map.", error);
+      return null;
+    }
   }
 
   function notifyBattleComplete() {
@@ -163,6 +197,11 @@
       coins: last?.coins ?? state.startingCoins,
     };
     window.parent?.postMessage(payload, "*");
+  }
+
+  function notifyEmbedReady() {
+    if (!state.embedMode) return;
+    window.parent?.postMessage({ type: "maze-boss-ready" }, "*");
   }
 
   function normalizeMapData(data) {
@@ -1293,22 +1332,44 @@
     }, 80);
   }
 
+  function handleEmbedMessage(event) {
+    const data = event?.data;
+    if (!data || data.type !== "maze-start-boss-battle" || !state.embedMode) return;
+    const payload = data.payload;
+    if (!payload || typeof payload !== "object") return;
+    try {
+      initEmbeddedBattle(payload);
+    } catch (error) {
+      console.error("Failed to start embedded boss battle:", error);
+    }
+  }
+
   async function loadDefaultMap() {
+    const cached = loadCachedActiveMap();
+    if (cached) {
+      initBattle(cached.data, cached.name);
+      return;
+    }
     if (window.location.protocol === "file:") {
       initBattle(cloneData(DEFAULT_MAP_DATA), "内置示例地图");
       els.mapMeta.textContent += "（本地文件模式）";
       return;
     }
-    try {
-      const response = await fetch(DEFAULT_MAP_URL, { cache: "no-store" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      initBattle(data);
-    } catch (error) {
-      console.warn("Default boss map could not be loaded; using embedded map.", error);
-      initBattle(cloneData(DEFAULT_MAP_DATA), "内置示例地图");
-      els.mapMeta.textContent += "（本地文件模式）";
+    for (const url of DEFAULT_MAP_CANDIDATES) {
+      try {
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) continue;
+        const data = await response.json();
+        const mapName = url.split("/").pop() || "maze_15_15.json";
+        initBattle(data, mapName);
+        return;
+      } catch (error) {
+        console.warn(`Boss map candidate failed: ${url}`, error);
+      }
     }
+    console.warn("Default boss map could not be loaded; using embedded map.");
+    initBattle(cloneData(DEFAULT_MAP_DATA), "内置示例地图");
+    els.mapMeta.textContent += "（本地文件模式）";
   }
 
   function bindEvents() {
@@ -1390,7 +1451,16 @@
   bindEvents();
 
   const embeddedBattle = parseBattleQuery();
-  if (embeddedBattle) {
+  if (embeddedBattle?.__embedHost) {
+    state.embedMode = true;
+    document.body.classList.add("embed-mode");
+    document.body.classList.remove("intro-active", "intro-leaving");
+    window.addEventListener("message", handleEmbedMessage);
+    initBattle(cloneData(DEFAULT_MAP_DATA), "Boss 战待命");
+    stopPlayback();
+    notifyEmbedReady();
+  } else if (embeddedBattle) {
+    window.addEventListener("message", handleEmbedMessage);
     initEmbeddedBattle(embeddedBattle);
   } else {
     loadDefaultMap();
