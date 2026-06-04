@@ -19,6 +19,7 @@ from __future__ import annotations
 from agents.base_agent import BaseAgent
 from agents.combat_agent import CombatAgent
 from agents.local_greedy_policy import LocalGreedyAgent
+from agents.global_greedy import GlobalGreedyAgent
 from agents.global_planner import GlobalPlannerAgent, Phase
 from core.state import GameContext, Action
 
@@ -35,7 +36,9 @@ class CompositeAgent(BaseAgent):
             **cfg.get("global", {}),
             "max_rounds": cfg.get("sim", {}).get("max_rounds", 500),
         }
+        self.strategy: str = cfg.get("composite", {}).get("strategy", "hybrid")
         self.global_planner = GlobalPlannerAgent(config=global_cfg)
+        self.global_greedy = GlobalGreedyAgent(config=global_cfg)
         self.local_greedy   = LocalGreedyAgent(config=cfg.get("local", {}))
         self.combat = CombatAgent()
 
@@ -47,17 +50,24 @@ class CompositeAgent(BaseAgent):
 
     def on_episode_start(self, ctx: GameContext):
         self.global_planner.on_episode_start(ctx)
+        self.global_greedy.on_episode_start(ctx)
         self._stuck_count = 0
         self._global_active = False
 
     def on_episode_end(self, ctx: GameContext):
         self.global_planner.on_episode_end(ctx)
+        self.global_greedy.on_episode_end(ctx)
 
     def decide(self, ctx: GameContext) -> Action:
         # 优先级 1：战斗状态始终最高
         if self.combat.should_fight(ctx):
             self._stuck_count = 0
             return self.combat.decide_combat(ctx)
+
+        if self.strategy == "direct_global":
+            self._stuck_count = 0
+            self._global_active = False
+            return self.global_greedy.decide(ctx)
 
         # 全局规划器处于必须自主控制的阶段（RUSH_TO_BOSS / RUSH_TO_EXIT）
         # 这两个阶段目标明确且路径已由全局规划，不应被局部打断
