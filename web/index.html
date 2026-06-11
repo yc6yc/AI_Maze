@@ -150,6 +150,13 @@
           </div>
           <p id="mapMeta" class="meta-text">正在加载地图数据...</p>
         </section>
+
+        <section class="tool-section compare-section" aria-label="算法对比">
+          <div class="section-title">算法对比</div>
+          <button id="runCompareBtn" type="button" class="primary-btn" style="width:100%;margin-bottom:12px;">运行对比</button>
+          <div id="compareResults" class="compare-results" hidden></div>
+          <p class="meta-text" style="font-size:11px;color:var(--muted);margin-top:6px;">比较 3×3 局部贪心 vs 记忆增强全局贪心，指标：总分 / 总步数</p>
+        </section>
       </aside>
 
       <section class="stage-panel" aria-label="迷宫画布">

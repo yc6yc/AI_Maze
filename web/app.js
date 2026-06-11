@@ -33,6 +33,33 @@
   const TRAP_DAMAGE = 30;
   const TRAP_HIDE_DELAY_MS = 1000;
 
+  // ============================================================
+  // Algorithm Comparison — Config & Constants
+  // ============================================================
+  const ALGO_A_CONFIG = {
+    coin_value: 50,
+    trap_penalty: 30,
+    step_cost: 10.0,
+    explore_bonus: 8.0,
+    visited_penalty: 3.0,
+    w_backtrack: 2.0,
+  };
+
+  const ALGO_B_CONFIG = {
+    coin_value: 50.0,
+    frontier_value: 14.0,
+    boss_value: 120.0,
+    exit_value: 1000000.0,
+    trap_step_cost: 31.0,
+    target_retry_buffer: 1,
+    frontier_unknown_weight: 4.0,
+    revisit_penalty: 0.15,
+    min_explore_before_boss: 0.25,
+  };
+
+  const COMPARE_MAX_STEPS = 500;
+  const COMPARE_MAX_STUCK = 20;
+
   const TILE = {
     "#": {
       label: "墙体",
@@ -202,6 +229,9 @@
     lastEffectFrameIndex: null,
     hiddenTraps: new Set(),
     trapHideTimers: new Map(),
+    compareResult: null,
+    _originalFrames: null,
+    _originalRoute: null,
     layout: {
       dpr: 1,
       width: 0,
@@ -516,6 +546,893 @@
 
     return { frames, route };
   }
+  // ============================================================
+  // Shared FOG simulation utilities
+  // ============================================================
+
+  function initFogMap(rows, cols) {
+    return Array.from({ length: rows }, function () { return Array(cols).fill(null); });
+  }
+
+  // isWalkableFog: None (null) → not walkable (enforces FOG constraint)
+  function isWalkableFog(cell) {
+    return cell !== null && cell !== "#";
+  }
+
+  // neighborsFog: 4-directional neighbors using fog_map (null = impassable)
+  function neighborsFog(fogMap, pos) {
+    var dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+    var result = [];
+    for (var d = 0; d < dirs.length; d++) {
+      var nr = pos.r + dirs[d][0];
+      var nc = pos.c + dirs[d][1];
+      if (nr >= 0 && nc >= 0 && nr < fogMap.length && nc < fogMap[0].length) {
+        if (isWalkableFog(fogMap[nr][nc])) {
+          result.push({ r: nr, c: nc });
+        }
+      }
+    }
+    return result;
+  }
+
+  function revealFog(fogMap, groundTruth, pos, viewRadius) {
+    for (var dr = -viewRadius; dr <= viewRadius; dr++) {
+      for (var dc = -viewRadius; dc <= viewRadius; dc++) {
+        var nr = pos.r + dr;
+        var nc = pos.c + dc;
+        if (nr >= 0 && nc >= 0 && nr < fogMap.length && nc < fogMap[0].length) {
+          fogMap[nr][nc] = groundTruth[nr][nc];
+        }
+      }
+    }
+  }
+
+  function getRevealedSet(fogMap) {
+    var revealed = new Set();
+    for (var r = 0; r < fogMap.length; r++) {
+      for (var c = 0; c < fogMap[0].length; c++) {
+        if (fogMap[r][c] !== null) {
+          revealed.add(keyOf({ r: r, c: c }));
+        }
+      }
+    }
+    return revealed;
+  }
+
+  function findStartPos(grid) {
+    for (var r = 0; r < grid.length; r++) {
+      for (var c = 0; c < grid[0].length; c++) {
+        if (grid[r][c] === "S") return { r: r, c: c };
+      }
+    }
+    return null;
+  }
+
+  // ============================================================
+  // Dijkstra (port of core/pathfinding.py dijkstra)
+  // Used by Algorithm B (GlobalGreedyAgent)
+  // ============================================================
+  function dijkstraFog(fogMap, start, triggeredTraps, trapStepCost) {
+    var dist = {};
+    var prev = {};
+    var sk = keyOf(start);
+    dist[sk] = 0;
+    prev[sk] = null;
+    var heap = [[0, start]];
+
+    while (heap.length) {
+      // Extract min (simple sort — maze sizes are small, <10000 cells)
+      heap.sort(function (a, b) { return a[0] - b[0]; });
+      var curEntry = heap.shift();
+      var d = curEntry[0];
+      var cur = curEntry[1];
+      var ck = keyOf(cur);
+      if (d > (dist[ck] !== undefined ? dist[ck] : Infinity)) continue;
+
+      var nbrs = neighborsFog(fogMap, cur);
+      for (var i = 0; i < nbrs.length; i++) {
+        var next = nbrs[i];
+        var nk = keyOf(next);
+        var cell = fogMap[next.r][next.c];
+        var weight = 1.0;
+        if (cell === "T" && !triggeredTraps.has(nk)) {
+          weight = 1.0 + trapStepCost;
+        }
+        var nd = d + weight;
+        if (nd < (dist[nk] !== undefined ? dist[nk] : Infinity)) {
+          dist[nk] = nd;
+          prev[nk] = cur;
+          heap.push([nd, next]);
+        }
+      }
+    }
+
+    return { dist: dist, prev: prev };
+  }
+
+  function extractPathFog(prev, start, goal) {
+    var gk = keyOf(goal);
+    if (!(gk in prev)) return null;
+    var path = [];
+    var cur = goal;
+    while (cur) {
+      path.push(cur);
+      var ck = keyOf(cur);
+      cur = prev[ck];
+    }
+    path.reverse();
+    return path;
+  }
+
+  // ============================================================
+  // Boss battle simulation (port of boss.js buildFrames combat logic)
+  // Deterministic, no animation — returns { won, coinsAfter }
+  // ============================================================
+  function runBossBattle(bossHpList, rawSkills, minRounds, coinConsumption, startingCoins) {
+    var coins = startingCoins;
+    var skills = rawSkills.map(function (pair) {
+      return { damage: pair[0], cooldown: pair[1], remainingCd: 0 };
+    });
+
+    for (var b = 0; b < bossHpList.length; b++) {
+      var bossHp = bossHpList[b];
+
+      while (bossHp > 0 && coins >= 0) {
+        // One attempt: up to minRounds rounds
+        for (var attackRound = 1; attackRound <= minRounds; attackRound++) {
+          // Greedy: pick highest-damage available skill
+          var bestIdx = null;
+          var bestDamage = -1;
+          for (var si = 0; si < skills.length; si++) {
+            if (skills[si].remainingCd === 0 && skills[si].damage > bestDamage) {
+              bestDamage = skills[si].damage;
+              bestIdx = si;
+            }
+          }
+
+          if (bestIdx !== null) {
+            bossHp -= skills[bestIdx].damage;
+            skills[bestIdx].remainingCd = skills[bestIdx].cooldown;
+          }
+
+          // Tick cooldowns
+          for (var si2 = 0; si2 < skills.length; si2++) {
+            if (skills[si2].remainingCd > 0) skills[si2].remainingCd -= 1;
+          }
+
+          if (bossHp <= 0) break;
+        }
+
+        if (bossHp > 0) {
+          // Ran out of minRounds — deduct coins and retry
+          coins -= coinConsumption;
+          if (coins < 0) {
+            return { won: false, coinsAfter: Math.max(0, coins + coinConsumption) };
+          }
+          // Reset skills for retry
+          for (var si3 = 0; si3 < skills.length; si3++) {
+            skills[si3].remainingCd = 0;
+          }
+        }
+      }
+    }
+
+    return { won: true, coinsAfter: coins };
+  }
+
+  // ============================================================
+  // Algorithm A: simulateLocalGreedy
+  // Port of agents/local_greedy_policy.py — LocalGreedyAgent
+  //
+  // Core logic:
+  //   1. Scan 3x3 window (8 neighbors)
+  //   2. Score each neighbor with _cell_score() formula
+  //   3. Pick highest positive score → move one step
+  //   4. No positive score → STAY (stuck counter)
+  //   5. Only uses fog_map (FOG constraint)
+  // ============================================================
+
+  function cellScoreA(r, c, fogMap, triggeredTraps, dist, visited, prevPos, cfg) {
+    var cell = fogMap[r][c];
+
+    // Raw game value (port of _cell_score lines 197-205)
+    var rawValue = 0.0;
+    if (cell === "C" || cell === "G") {
+      rawValue = cfg.coin_value;          // +50
+    } else if (cell === "T" && !triggeredTraps.has(keyOf({ r: r, c: c }))) {
+      rawValue = -cfg.trap_penalty;        // -30 (triggered traps don't repeat)
+    }
+    // cell === null won't reach here (handled in score3x3)
+
+    // Movement opportunity cost: dist * step_cost (line 209)
+    var movementCost = dist * cfg.step_cost;
+
+    // Score = (raw_value - movement_cost) / dist (line 214)
+    var score = (rawValue - movementCost) / dist;
+
+    // Penalty corrections (lines 217-221, absolute, NOT divided by dist)
+    if (visited && visited.has(keyOf({ r: r, c: c }))) {
+      score -= cfg.visited_penalty;
+    }
+    if (prevPos && r === prevPos.r && c === prevPos.c) {
+      score -= cfg.w_backtrack;
+    }
+
+    return score;
+  }
+
+  function score3x3(r, c, fogMap, triggeredTraps, visited, prevPos, cfg) {
+    // Port of _score_3x3 (lines 99-160)
+    var results = [];
+
+    for (var dr = -1; dr <= 1; dr++) {
+      for (var dc = -1; dc <= 1; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        var nr = r + dr;
+        var nc = c + dc;
+        if (nr < 0 || nc < 0 || nr >= fogMap.length || nc >= fogMap[0].length) continue;
+
+        var dist = Math.abs(dr) + Math.abs(dc);  // 1 or 2
+
+        if (dist === 1) {
+          // Direct neighbor: walkable OR unexplored (fogMap=null) included (line 134-147)
+          var cell = fogMap[nr][nc];
+          if (cell === null) {
+            // Unexplored direct neighbor: explore_bonus only (line 138-143)
+            var escore = cfg.explore_bonus;
+            if (prevPos && nr === prevPos.r && nc === prevPos.c) {
+              escore -= cfg.w_backtrack;
+            }
+            results.push([{ r: nr, c: nc }, escore]);
+            continue;
+          } else if (!isWalkableFog(cell)) {
+            continue;  // Known wall (line 145-146)
+          }
+        } else {
+          // Diagonal (dist=2): must be actually walkable (line 149-155)
+          if (!isWalkableFog(fogMap[nr][nc])) continue;
+          var mid1 = fogMap[r][nc];
+          var mid2 = fogMap[nr][c];
+          if (!isWalkableFog(mid1) && !isWalkableFog(mid2)) continue;
+        }
+
+        var score = cellScoreA(nr, nc, fogMap, triggeredTraps, dist, visited, prevPos, cfg);
+        results.push([{ r: nr, c: nc }, score]);
+      }
+    }
+
+    return results;
+  }
+
+  function firstStepA(r, c, target, fogMap) {
+    // Port of _first_step (lines 239-268)
+    var tr = target.r;
+    var tc = target.c;
+    var dist = Math.abs(tr - r) + Math.abs(tc - c);
+
+    if (dist === 1) {
+      return target;  // Direct neighbor, step directly
+    }
+
+    // Diagonal: find walkable intermediate cell (lines 261-266)
+    var candidates = [{ r: r, c: tc }, { r: tr, c: c }];
+    for (var i = 0; i < candidates.length; i++) {
+      var mid = candidates[i];
+      if (mid.r >= 0 && mid.c >= 0 && mid.r < fogMap.length && mid.c < fogMap[0].length &&
+          isWalkableFog(fogMap[mid.r][mid.c])) {
+        return mid;  // Step to intermediate cell
+      }
+    }
+
+    return null;  // Both intermediate cells are walls
+  }
+
+  function simulateLocalGreedy(data) {
+    var rows = data.maze.length;
+    var cols = data.maze[0].length;
+    var groundTruth = cloneGrid(data.maze);
+    var fogMap = initFogMap(rows, cols);
+    var viewRadius = 1;
+
+    var pos = findStartPos(groundTruth);
+    if (!pos) return { frames: [], route: [], score: 0, totalSteps: 0, totalValue: 0 };
+
+    var coins = 0;
+    var triggeredTraps = new Set();
+    var visited = new Set();
+    var prevPos = null;
+    var frames = [];
+    var bossDefeated = 0;
+    var bossHpList = Array.isArray(data.B) ? data.B.slice() : [];
+    var allBossesDefeated = bossHpList.length === 0;
+    var stuckCount = 0;
+    var cfg = ALGO_A_CONFIG;
+
+    visited.add(keyOf(pos));
+
+    for (var step = 0; step < COMPARE_MAX_STEPS; step++) {
+      var currentCell = groundTruth[pos.r][pos.c];
+      var event = "";
+      var phase = "探索中";
+      var bossEncounter = null;
+
+      // Record frame (fog state BEFORE scoring this step)
+      var revealedSet2 = getRevealedSet(fogMap);
+      frames.push({
+        round: step, pos: { r: pos.r, c: pos.c }, coins: coins,
+        bossCount: bossDefeated, phase: phase, event: event,
+        sourceCell: data.maze[pos.r][pos.c],
+        bossEncounter: bossEncounter,
+        grid: cloneGrid(groundTruth), revealed: new Set(revealedSet2),
+        heat: [], exploredRatio: revealedSet2.size / (rows * cols),
+      });
+
+      // Handle current cell (coin / trap / boss / exit)
+      if (step > 0) {
+        if (currentCell === "C" || currentCell === "G") {
+          coins += COIN_VALUE;
+          groundTruth[pos.r][pos.c] = " ";
+          fogMap[pos.r][pos.c] = " ";
+          event = "拾取金币，金币 +" + COIN_VALUE;
+          phase = "资源收集";
+        } else if (currentCell === "T" && !triggeredTraps.has(keyOf(pos))) {
+          coins -= TRAP_DAMAGE;
+          triggeredTraps.add(keyOf(pos));
+          groundTruth[pos.r][pos.c] = " ";
+          fogMap[pos.r][pos.c] = " ";
+          event = "触发陷阱，金币 -" + TRAP_DAMAGE;
+          phase = "风险处理";
+        } else if (currentCell === "B" && bossHpList.length > 0) {
+          var bossHp = bossHpList.shift();
+          var battleResult = runBossBattle(
+            [bossHp],
+            data.PlayerSkills || [[8, 4], [2, 0], [4, 2], [6, 3]],
+            data.minRouds || 20,
+            data.CoinConsumption || 5,
+            coins
+          );
+          coins = battleResult.coinsAfter;
+          if (battleResult.won) {
+            bossDefeated += 1;
+            bossEncounter = { bossIndex: bossDefeated, bossTotal: (Array.isArray(data.B) ? data.B.length : 0) };
+            event = "Boss " + bossDefeated + " 已击败";
+            phase = "Boss 战斗";
+            if (bossHpList.length === 0) allBossesDefeated = true;
+          } else {
+            event = "Boss 战斗失败，金币剩余 " + coins;
+            phase = "Boss 战斗";
+          }
+          groundTruth[pos.r][pos.c] = " ";
+          fogMap[pos.r][pos.c] = " ";
+        } else if (currentCell === "E" && allBossesDefeated) {
+          frames[frames.length - 1].event = "抵达出口";
+          frames[frames.length - 1].phase = "已完成";
+          break;
+        }
+        // Update the frame we just recorded with the event/phase from cell handling
+        if (event) frames[frames.length - 1].event = event;
+        if (phase !== "探索中") frames[frames.length - 1].phase = phase;
+        if (bossEncounter) frames[frames.length - 1].bossEncounter = bossEncounter;
+        // Also update coins and bossCount on the frame after cell handling
+        frames[frames.length - 1].coins = coins;
+        frames[frames.length - 1].bossCount = bossDefeated;
+        // Update grid to reflect cell changes
+        frames[frames.length - 1].grid = cloneGrid(groundTruth);
+      }
+
+      // Check exit
+      if (currentCell === "E" && allBossesDefeated) break;
+
+      // Score 3x3 and decide next move (BEFORE revealing — so unexplored cells
+      // at the edge of the fog still get explore_bonus)
+      var candidates = score3x3(pos.r, pos.c, fogMap, triggeredTraps, visited, prevPos, cfg);
+      candidates.sort(function (a, b) { return b[1] - a[1]; });
+
+      var moved = false;
+      var usedFallback = false;
+      // Phase 1: try positive-score candidates (explore / collect)
+      for (var ci = 0; ci < candidates.length; ci++) {
+        var target = candidates[ci][0];
+        var candidateScore = candidates[ci][1];
+        if (candidateScore <= 0) break;
+        var first = firstStepA(pos.r, pos.c, target, fogMap);
+        if (first && first.r >= 0 && first.r < rows && first.c >= 0 && first.c < cols
+            && groundTruth[first.r][first.c] !== "#") {
+          prevPos = { r: pos.r, c: pos.c };
+          pos = first;
+          visited.add(keyOf(first));
+          moved = true;
+          break;
+        }
+      }
+      // Phase 2: no positive candidate worked → pick the best available
+      // (least-negative) walkable neighbor. This prevents the agent from
+      // getting permanently stuck at dead ends in standalone mode.
+      // In the Python ecosystem, the CompositeAgent would switch to
+      // GlobalPlanner here; standalone, we force backtracking.
+      if (!moved) {
+        for (var cj = 0; cj < candidates.length; cj++) {
+          var ftarget = candidates[cj][0];
+          var ffirst = firstStepA(pos.r, pos.c, ftarget, fogMap);
+          if (ffirst && ffirst.r >= 0 && ffirst.r < rows && ffirst.c >= 0 && ffirst.c < cols
+              && groundTruth[ffirst.r][ffirst.c] !== "#") {
+            prevPos = { r: pos.r, c: pos.c };
+            pos = ffirst;
+            visited.add(keyOf(ffirst));
+            moved = true;
+            usedFallback = true;
+            break;
+          }
+        }
+      }
+
+      if (!moved) {
+        stuckCount += 1;
+        if (stuckCount >= COMPARE_MAX_STUCK) break;
+      } else if (usedFallback) {
+        // Consecutive fallback moves = effectively stuck (just going in circles)
+        stuckCount += 1;
+        if (stuckCount >= COMPARE_MAX_STUCK) break;
+      } else {
+        stuckCount = 0;
+      }
+
+      // Reveal 3x3 around PREVIOUS position (where the agent LEFT).
+      // This creates unexplored cells at the forward edge of the fog so that
+      // the next scoring still has unexplored neighbors to trigger explore_bonus.
+      // Matches Python LocalSimulator where _reveal_fov happens in _finish_maze_step
+      // (after the move), but the key difference is we reveal at the OLD position
+      // so the 8-neighbor scoring window extends beyond the revealed area.
+      var revealTarget = prevPos || pos;
+      revealFog(fogMap, groundTruth, revealTarget, viewRadius);
+    }
+
+    var totalSteps = frames.length;
+    var totalValue = coins;
+    var score = totalSteps > 0 ? totalValue / totalSteps : 0;
+
+    return {
+      frames: frames, route: frames.map(function (f) { return f.pos; }),
+      score: score, totalSteps: totalSteps, totalValue: totalValue,
+      coins: coins, bossDefeated: bossDefeated,
+    };
+  }
+
+  // ============================================================
+  // Algorithm B: simulateGlobalGreedy
+  // Port of agents/global_greedy.py — GlobalGreedyAgent
+  //
+  // Core logic:
+  //   1. Maintain fog_map (all revealed cells)
+  //   2. Each step: Dijkstra from current pos through known walkable cells
+  //   3. Enumerate all candidates (coins / frontiers / boss / exit) in fog_map
+  //   4. Score each: value / path_cost - revisit_penalty
+  //   5. Take first step of best path, re-evaluate next turn
+  // ============================================================
+
+  function scanBossesB(fogMap) {
+    var known = [];
+    for (var r = 0; r < fogMap.length; r++) {
+      for (var c = 0; c < fogMap[0].length; c++) {
+        if (fogMap[r][c] === "B") {
+          known.push({ r: r, c: c });
+        }
+      }
+    }
+    return known;
+  }
+
+  function findFrontiersB(fogMap) {
+    // Port of _find_frontiers (lines 193-201)
+    var frontiers = [];
+    var dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+    for (var r = 0; r < fogMap.length; r++) {
+      for (var c = 0; c < fogMap[0].length; c++) {
+        if (!isWalkableFog(fogMap[r][c])) continue;
+        for (var d = 0; d < dirs.length; d++) {
+          var nr = r + dirs[d][0];
+          var nc = c + dirs[d][1];
+          if (nr >= 0 && nc >= 0 && nr < fogMap.length && nc < fogMap[0].length) {
+            if (fogMap[nr][nc] === null) {
+              frontiers.push({ r: r, c: c });
+              break;
+            }
+          }
+        }
+      }
+    }
+    return frontiers;
+  }
+
+  function countUnknownNeighborsB(fogMap, pos) {
+    // Port of _count_unknown_neighbors (lines 203-204)
+    var count = 0;
+    var dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+    for (var d = 0; d < dirs.length; d++) {
+      var nr = pos.r + dirs[d][0];
+      var nc = pos.c + dirs[d][1];
+      if (nr >= 0 && nc >= 0 && nr < fogMap.length && nc < fogMap[0].length) {
+        if (fogMap[nr][nc] === null) count += 1;
+      }
+    }
+    return count;
+  }
+
+  function exploredRatioB(fogMap) {
+    // Port of _explored_ratio (lines 206-214)
+    var total = fogMap.length * fogMap[0].length;
+    var explored = 0;
+    for (var r = 0; r < fogMap.length; r++) {
+      for (var c = 0; c < fogMap[0].length; c++) {
+        if (fogMap[r][c] !== null) explored += 1;
+      }
+    }
+    return total ? explored / total : 0;
+  }
+
+  function shouldForceCollectB(knownBosses, coins, coinConsumption, cfg) {
+    // Port of _should_force_collect (lines 175-179)
+    if (!knownBosses.length) return false;
+    var need = Math.max(coinConsumption * cfg.target_retry_buffer, coinConsumption);
+    return coins < need;
+  }
+
+  function scoreBossTargetB(distanceCost, coins, knownBosses, fogMap, coinConsumption, cfg) {
+    // Port of _score_boss_target (lines 156-173)
+    if (!knownBosses.length) return -1e9;
+
+    var need = Math.max(coinConsumption * cfg.target_retry_buffer, coinConsumption);
+    var exploredRatio = exploredRatioB(fogMap);
+    var ready = coins >= need;
+
+    var base = cfg.boss_value / Math.max(distanceCost, 1.0);
+    if (ready) {
+      base += 40.0;
+    } else {
+      base -= Math.max(0, need - coins);
+    }
+
+    if (exploredRatio < cfg.min_explore_before_boss && !ready) {
+      base -= 25.0;
+    }
+    return base;
+  }
+
+  function enumerateCandidatesB(fogMap, pos, triggeredTraps, visitCount, coins, cfg, data, allBossesDefeated, knownBosses) {
+    // Port of _enumerate_candidates (lines 94-154)
+
+    // Run Dijkstra from current position (with trap weighting)
+    var dijkstraResult = dijkstraFog(fogMap, pos, triggeredTraps, cfg.trap_step_cost);
+    var dist = dijkstraResult.dist;
+    var prev = dijkstraResult.prev;
+
+    var candidates = [];
+
+    // Scan all revealed cells for coin / boss / exit targets
+    for (var r = 0; r < fogMap.length; r++) {
+      for (var c = 0; c < fogMap[0].length; c++) {
+        var cell = fogMap[r][c];
+        var target = { r: r, c: c };
+        var tk = keyOf(target);
+        if (cell === null || (r === pos.r && c === pos.c)) continue;
+        if (!(tk in dist)) continue;
+
+        var path = extractPathFog(prev, pos, target);
+        if (!path || path.length < 2) continue;
+        var movePath = path.slice(1);  // exclude start position
+        if (!movePath.length) continue;
+
+        var distanceCost = dist[tk];
+        var revisitPenalty = cfg.revisit_penalty * (visitCount[tk] || 0);
+
+        if (cell === "C" || cell === "G") {
+          // Coin target (lines 127-131)
+          var coinScore = cfg.coin_value / Math.max(distanceCost, 1.0) - revisitPenalty;
+          if (shouldForceCollectB(knownBosses, coins, data.CoinConsumption || 5, cfg)) {
+            coinScore += 20.0;
+          }
+          candidates.push(["coin", target, coinScore, movePath]);
+        } else if (cell === "B") {
+          // Boss target (lines 132-134)
+          var bossScore = scoreBossTargetB(distanceCost, coins, knownBosses, fogMap, data.CoinConsumption || 5, cfg) - revisitPenalty;
+          candidates.push(["boss", target, bossScore, movePath]);
+        } else if (cell === "E" && allBossesDefeated) {
+          // Exit target (lines 135-137)
+          var exitScore = cfg.exit_value / Math.max(distanceCost, 1.0);
+          candidates.push(["exit", target, exitScore, movePath]);
+        }
+      }
+    }
+
+    // Frontier targets (lines 139-152)
+    var frontiers = findFrontiersB(fogMap);
+    for (var fi = 0; fi < frontiers.length; fi++) {
+      var frontier = frontiers[fi];
+      var fk = keyOf(frontier);
+      if (frontier.r === pos.r && frontier.c === pos.c) continue;
+      if (!(fk in dist)) continue;
+
+      var fpath = extractPathFog(prev, pos, frontier);
+      if (!fpath || fpath.length < 2) continue;
+      var fmovePath = fpath.slice(1);
+      if (!fmovePath.length) continue;
+
+      var fdistanceCost = dist[fk];
+      var unknownCount = countUnknownNeighborsB(fogMap, frontier);
+      var rawValue = cfg.frontier_value + cfg.frontier_unknown_weight * unknownCount;
+      var frontierScore = rawValue / Math.max(fdistanceCost, 1.0) - cfg.revisit_penalty * (visitCount[fk] || 0);
+      candidates.push(["frontier", frontier, frontierScore, fmovePath]);
+    }
+
+    return candidates;
+  }
+
+  function simulateGlobalGreedy(data) {
+    var rows = data.maze.length;
+    var cols = data.maze[0].length;
+    var groundTruth = cloneGrid(data.maze);
+    var fogMap = initFogMap(rows, cols);
+    var viewRadius = 1;
+
+    var pos = findStartPos(groundTruth);
+    if (!pos) return { frames: [], route: [], score: 0, totalSteps: 0, totalValue: 0 };
+
+    var coins = 0;
+    var triggeredTraps = new Set();
+    var visitCount = {};
+    var frames = [];
+    var bossDefeated = 0;
+    var bossHpList = Array.isArray(data.B) ? data.B.slice() : [];
+    var allBossesDefeated = bossHpList.length === 0;
+    var stuckCount = 0;
+    var cfg = ALGO_B_CONFIG;
+
+    // Initial reveal
+    revealFog(fogMap, groundTruth, pos, viewRadius);
+    visitCount[keyOf(pos)] = 1;
+
+    var knownBosses = [];
+
+    for (var step = 0; step < COMPARE_MAX_STEPS; step++) {
+      var currentCell = groundTruth[pos.r][pos.c];
+      var event = "";
+      var phase = "探索中";
+      var bossEncounter = null;
+
+      // Handle current cell
+      if (step > 0) {
+        if (currentCell === "C" || currentCell === "G") {
+          coins += COIN_VALUE;
+          groundTruth[pos.r][pos.c] = " ";
+          fogMap[pos.r][pos.c] = " ";
+          event = "拾取金币，金币 +" + COIN_VALUE;
+          phase = "资源收集";
+        } else if (currentCell === "T" && !triggeredTraps.has(keyOf(pos))) {
+          coins -= TRAP_DAMAGE;
+          triggeredTraps.add(keyOf(pos));
+          groundTruth[pos.r][pos.c] = " ";
+          fogMap[pos.r][pos.c] = " ";
+          event = "触发陷阱，金币 -" + TRAP_DAMAGE;
+          phase = "风险处理";
+        } else if (currentCell === "B" && bossHpList.length > 0) {
+          var bossHp = bossHpList.shift();
+          var battleResult = runBossBattle(
+            [bossHp],
+            data.PlayerSkills || [[8, 4], [2, 0], [4, 2], [6, 3]],
+            data.minRouds || 20,
+            data.CoinConsumption || 5,
+            coins
+          );
+          coins = battleResult.coinsAfter;
+          if (battleResult.won) {
+            bossDefeated += 1;
+            bossEncounter = { bossIndex: bossDefeated, bossTotal: (Array.isArray(data.B) ? data.B.length : 0) };
+            event = "Boss " + bossDefeated + " 已击败";
+            phase = "Boss 战斗";
+            if (bossHpList.length === 0) allBossesDefeated = true;
+          } else {
+            event = "Boss 战斗失败，金币剩余 " + coins;
+            phase = "Boss 战斗";
+          }
+          groundTruth[pos.r][pos.c] = " ";
+          fogMap[pos.r][pos.c] = " ";
+        } else if (currentCell === "E" && allBossesDefeated) {
+          event = "抵达出口";
+          phase = "已完成";
+          var revealedSet = getRevealedSet(fogMap);
+          frames.push({
+            round: step, pos: { r: pos.r, c: pos.c }, coins: coins,
+            bossCount: bossDefeated, phase: phase, event: event,
+            sourceCell: "E", bossEncounter: null,
+            grid: cloneGrid(groundTruth), revealed: new Set(revealedSet),
+            heat: [], exploredRatio: revealedSet.size / (rows * cols),
+          });
+          break;
+        }
+      }
+
+      // Record frame
+      var revealedSet2 = getRevealedSet(fogMap);
+      frames.push({
+        round: step, pos: { r: pos.r, c: pos.c }, coins: coins,
+        bossCount: bossDefeated, phase: phase, event: event,
+        sourceCell: data.maze[pos.r][pos.c],
+        bossEncounter: bossEncounter,
+        grid: cloneGrid(groundTruth), revealed: new Set(revealedSet2),
+        heat: [], exploredRatio: revealedSet2.size / (rows * cols),
+      });
+
+      if (currentCell === "E" && allBossesDefeated) break;
+
+      // Reveal 3x3
+      revealFog(fogMap, groundTruth, pos, viewRadius);
+
+      // Scan known bosses in fog_map (port of _scan_bosses)
+      knownBosses = scanBossesB(fogMap);
+
+      // Mark current visit (port of _mark_current_visit)
+      var pk = keyOf(pos);
+      visitCount[pk] = (visitCount[pk] || 0) + 1;
+
+      // Enumerate candidates
+      var candidates = enumerateCandidatesB(fogMap, pos, triggeredTraps, visitCount, coins, cfg, data, allBossesDefeated, knownBosses);
+
+      if (!candidates.length) {
+        stuckCount += 1;
+        if (stuckCount >= COMPARE_MAX_STUCK) break;
+        continue;
+      }
+
+      // Sort by score desc, pick best (port of decide() lines 81-84)
+      candidates.sort(function (a, b) { return b[2] - a[2]; });
+      var best = candidates[0];
+      var bestPath = best[3];
+
+      if (!bestPath || !bestPath.length) {
+        stuckCount += 1;
+        if (stuckCount >= COMPARE_MAX_STUCK) break;
+        continue;
+      }
+
+      // Take first step of best path (port of line 92)
+      pos = bestPath[0];
+      stuckCount = 0;
+    }
+
+    var totalSteps = frames.length;
+    var totalValue = coins;
+    var score = totalSteps > 0 ? totalValue / totalSteps : 0;
+
+    return {
+      frames: frames, route: frames.map(function (f) { return f.pos; }),
+      score: score, totalSteps: totalSteps, totalValue: totalValue,
+      coins: coins, bossDefeated: bossDefeated,
+    };
+  }
+
+  // ============================================================
+  // Comparison runner & UI integration
+  // ============================================================
+
+  function runComparison() {
+    if (!state.data) {
+      alert("请先导入或加载地图");
+      return;
+    }
+
+    var data = state.data;
+    var resultA, resultB;
+
+    // Run Algorithm A (local 3x3 greedy)
+    var startA = performance.now();
+    resultA = simulateLocalGreedy(data);
+    var timeA = performance.now() - startA;
+
+    // Run Algorithm B (global memory-based greedy)
+    var startB = performance.now();
+    resultB = simulateGlobalGreedy(data);
+    var timeB = performance.now() - startB;
+
+    // Store results
+    state.compareResult = {
+      algoA: resultA,
+      algoB: resultB,
+      timeA: timeA,
+      timeB: timeB,
+      winner: resultA.score > resultB.score ? "A" : (resultB.score > resultA.score ? "B" : "tie"),
+    };
+
+    // Show results panel
+    renderCompareResults(state.compareResult);
+  }
+
+  function renderCompareResults(cr) {
+    var panel = document.getElementById("compareResults");
+    if (!panel) return;
+
+    var a = cr.algoA;
+    var b = cr.algoB;
+    var winnerA = cr.winner === "A";
+    var winnerB = cr.winner === "B";
+
+    panel.innerHTML =
+      '<div class="compare-header">算法对比结果</div>' +
+      '<div class="compare-cards">' +
+        buildCompareCard("算法 A · 纯 3×3 局部贪心", a, cr.timeA, winnerA, "仅看当前 3×3 窗口, O(1)/步") +
+        buildCompareCard("算法 B · 记忆增强全局贪心", b, cr.timeB, winnerB, "基于所有已揭露格子 Dijkstra, O(R log R)/步") +
+      '</div>' +
+      '<div class="compare-actions">' +
+        '<button class="secondary-btn" data-compare-view="A">查看算法 A 路径</button>' +
+        '<button class="secondary-btn" data-compare-view="B">查看算法 B 路径</button>' +
+        '<button class="secondary-btn" data-compare-view="original">查看原始规划</button>' +
+      '</div>';
+
+    panel.hidden = false;
+  }
+
+  function buildCompareCard(title, result, timeMs, isWinner, desc) {
+    var winnerClass = isWinner ? " compare-winner" : "";
+    var winnerBadge = isWinner ? '<span class="compare-badge">🏆 胜出</span>' : "";
+    var scoreFormatted = result.score.toFixed(2);
+
+    return (
+      '<div class="compare-card' + winnerClass + '">' +
+        '<div class="compare-card-title">' + title + winnerBadge + '</div>' +
+        '<div class="compare-card-desc">' + desc + '</div>' +
+        '<div class="compare-metrics">' +
+          '<div class="compare-metric"><span>总分/总步数</span><strong>' + scoreFormatted + '</strong></div>' +
+          '<div class="compare-metric"><span>总步数</span><strong>' + result.totalSteps + '</strong></div>' +
+          '<div class="compare-metric"><span>最终金币</span><strong>' + result.coins + '</strong></div>' +
+          '<div class="compare-metric"><span>击败Boss</span><strong>' + (result.bossDefeated || 0) + '</strong></div>' +
+          '<div class="compare-metric"><span>耗时</span><strong>' + timeMs.toFixed(0) + ' ms</strong></div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  // Expose view-algo switcher to window so onclick works
+  window._viewAlgo = function (mode) {
+    if (!state.compareResult) return;
+    stopPlayback();
+
+    var result, label;
+    if (mode === "A") {
+      result = state.compareResult.algoA;
+      label = "算法 A (纯 3×3)";
+    } else if (mode === "B") {
+      result = state.compareResult.algoB;
+      label = "算法 B (记忆增强)";
+    } else {
+      // Rebuild original route
+      if (!state._originalFrames) {
+        var origResult = createFrames(state.data);
+        state._originalFrames = origResult.frames;
+        state._originalRoute = origResult.route;
+      }
+      state.frames = state._originalFrames;
+      state.route = state._originalRoute;
+      label = "原始规划";
+    }
+
+    if (mode === "A" || mode === "B") {
+      state.frames = result.frames;
+      state.route = result.route;
+    }
+    state.frameIndex = 0;
+    state.grid = cloneGrid(state.data.maze);
+    clearTrapHideState();
+    clearBossAlert();
+    clearBossOverlayCloseTimer();
+    clearBossWinAlert();
+    clearEffects();
+    els.timeline.max = String(Math.max(0, state.frames.length - 1));
+    els.timeline.value = "0";
+    els.metricRoute.textContent = state.route.length ? String(state.route.length - 1) : "0";
+    els.mapName.textContent = (els.mapName.textContent || "").replace(/ \| .*$/, "") + " | " + label;
+    updateUi();
+    fitCanvas();
+    draw();
+  };
 
   function initMap(data, name = "maze_15_15.json") {
     validateMap(data);
@@ -529,6 +1446,9 @@
     state.hovered = null;
     state.selected = null;
     state.bossBattleActive = false;
+    state.compareResult = null;
+    state._originalFrames = null;
+    state._originalRoute = null;
     state.bossBattlePendingFrame = null;
     state.bossBattleQueue = [];
     state.bossAutoResume = false;
@@ -1449,6 +2369,25 @@
     });
 
     els.loadDefaultBtn.addEventListener("click", loadDefaultMap);
+
+    // Algorithm comparison button
+    var runCompareBtn = document.getElementById("runCompareBtn");
+    if (runCompareBtn) {
+      runCompareBtn.addEventListener("click", function () {
+        runComparison();
+      });
+    }
+
+    // Compare view-switch buttons (event delegation on compareResults panel)
+    var comparePanel = document.getElementById("compareResults");
+    if (comparePanel) {
+      comparePanel.addEventListener("click", function (e) {
+        var btn = e.target.closest("[data-compare-view]");
+        if (!btn) return;
+        var mode = btn.getAttribute("data-compare-view");
+        window._viewAlgo(mode);
+      });
+    }
     els.fileInput.addEventListener("change", async (event) => {
       const file = event.target.files?.[0];
       if (!file) return;
