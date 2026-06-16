@@ -1187,19 +1187,25 @@
     var stuckCount = 0;
     var cfg = ALGO_B_CONFIG;
 
-    // Initial reveal
+    // Initial reveal at start position so the first frame shows something
     revealFog(fogMap, groundTruth, pos, viewRadius);
     visitCount[keyOf(pos)] = 1;
 
     var knownBosses = [];
 
     for (var step = 0; step < COMPARE_MAX_STEPS; step++) {
+      // ── Step A: Reveal 3×3 at current position FIRST ──────────
+      // This must happen BEFORE frame recording so the viewer sees
+      // exactly what the agent knows — no "hidden" knowledge.
+      // (For step 0 this is redundant with the initial reveal above.)
+      revealFog(fogMap, groundTruth, pos, viewRadius);
+
+      // ── Step B: Handle current cell (coin / trap / boss / exit) ─
       var currentCell = groundTruth[pos.r][pos.c];
       var event = "";
       var phase = "探索中";
       var bossEncounter = null;
 
-      // Handle current cell
       if (step > 0) {
         if (currentCell === "C" || currentCell === "G") {
           coins += COIN_VALUE;
@@ -1237,21 +1243,20 @@
           groundTruth[pos.r][pos.c] = " ";
           fogMap[pos.r][pos.c] = " ";
         } else if (currentCell === "E" && allBossesDefeated) {
-          event = "抵达出口";
-          phase = "已完成";
-          var revealedSet = getRevealedSet(fogMap);
+          // Record final frame before breaking
+          var revealedSetE = getRevealedSet(fogMap);
           frames.push({
             round: step, pos: { r: pos.r, c: pos.c }, coins: coins,
-            bossCount: bossDefeated, phase: phase, event: event,
+            bossCount: bossDefeated, phase: "已完成", event: "抵达出口",
             sourceCell: "E", bossEncounter: null,
-            grid: cloneGrid(groundTruth), revealed: new Set(revealedSet),
-            heat: [], exploredRatio: revealedSet.size / (rows * cols),
+            grid: cloneGrid(groundTruth), revealed: new Set(revealedSetE),
+            heat: [], exploredRatio: revealedSetE.size / (rows * cols),
           });
           break;
         }
       }
 
-      // Record frame
+      // ── Step C: Record frame (fog ALREADY expanded by Step A) ──
       var revealedSet2 = getRevealedSet(fogMap);
       frames.push({
         round: step, pos: { r: pos.r, c: pos.c }, coins: coins,
@@ -1262,11 +1267,17 @@
         heat: [], exploredRatio: revealedSet2.size / (rows * cols),
       });
 
+      // Update frame with cell-handling results (coins/phase/grid may have changed)
+      if (event) frames[frames.length - 1].event = event;
+      if (phase !== "探索中") frames[frames.length - 1].phase = phase;
+      if (bossEncounter) frames[frames.length - 1].bossEncounter = bossEncounter;
+      frames[frames.length - 1].coins = coins;
+      frames[frames.length - 1].bossCount = bossDefeated;
+      frames[frames.length - 1].grid = cloneGrid(groundTruth);
+
       if (currentCell === "E" && allBossesDefeated) break;
 
-      // Reveal 3x3
-      revealFog(fogMap, groundTruth, pos, viewRadius);
-
+      // ── Step D: Score, decide, move ──────────────────────────
       // Scan known bosses in fog_map (port of _scan_bosses)
       knownBosses = scanBossesB(fogMap);
 
@@ -1276,6 +1287,75 @@
 
       // Enumerate candidates
       var candidates = enumerateCandidatesB(fogMap, pos, triggeredTraps, visitCount, coins, cfg, data, allBossesDefeated, knownBosses);
+
+      // ── DEBUG: log agent knowledge each step ─────────────────
+      if (window.DEBUG_ALGO_B) {
+        var revealedCount = 0;
+        for (var drr = 0; drr < rows; drr++) {
+          for (var dcc = 0; dcc < cols; dcc++) {
+            if (fogMap[drr][dcc] !== null) revealedCount++;
+          }
+        }
+        console.group("Step " + step + " | pos=(" + pos.r + "," + pos.c + ") | revealed=" + revealedCount + "/" + (rows*cols));
+        // Print the top 5 candidates
+        var sortedForDebug = candidates.slice().sort(function(a,b){return b[2]-a[2];});
+        for (var di = 0; di < Math.min(5, sortedForDebug.length); di++) {
+          var dc = sortedForDebug[di];
+          console.log("  #" + (di+1) + " " + dc[0] + " @(" + dc[1].r + "," + dc[1].c + ") score=" + dc[2].toFixed(2) + " pathLen=" + (dc[3] ? dc[3].length : 0) + " path=" + JSON.stringify(dc[3]));
+        }
+        // Also log dijkstra dist for immediate neighbors
+        var dj = dijkstraFog(fogMap, pos, triggeredTraps, cfg.trap_step_cost);
+        var nbrs4 = [[-1,0],[1,0],[0,-1],[0,1]];
+        for (var dni = 0; dni < nbrs4.length; dni++) {
+          var nr = pos.r + nbrs4[dni][0], nc = pos.c + nbrs4[dni][1];
+          if (nr >= 0 && nc >= 0 && nr < rows && nc < cols) {
+            var nk = nr + "," + nc;
+            var dval = (nk in dj.dist) ? dj.dist[nk].toFixed(1) : "unreachable";
+            console.log("  Dijkstra neighbor (" + nr + "," + nc + ")=" + dval + " fog=" + (fogMap[nr][nc] === null ? "null" : fogMap[nr][nc]) + " GT=" + groundTruth[nr][nc]);
+          }
+        }
+        // Print mini fog_map (only rows with revealed cells)
+        var miniRows = [];
+        for (var drr = 0; drr < rows; drr++) {
+          var rowStr = "";
+          var hasRevealed = false;
+          for (var dcc = 0; dcc < cols; dcc++) {
+            var c = fogMap[drr][dcc];
+            if (c === null) { rowStr += "?"; }
+            else if (c === "#") { rowStr += "#"; }
+            else if (c === " ") { rowStr += "."; }
+            else { rowStr += c; hasRevealed = true; }
+            if (c !== null) hasRevealed = true;
+          }
+          if (hasRevealed) miniRows.push("  R" + drr + ": " + rowStr);
+        }
+        console.log(miniRows.join("\n"));
+        // Print groundTruth for comparison (what SHOULD be at known positions)
+        var gtRows = [];
+        for (var drr = 0; drr < rows; drr++) {
+          var hasGT = false;
+          var rowStr = "";
+          for (var dcc = 0; dcc < cols; dcc++) {
+            if (fogMap[drr][dcc] !== null) {
+              rowStr += groundTruth[drr][dcc];
+              hasGT = true;
+            } else {
+              rowStr += "?";
+            }
+          }
+          if (hasGT) gtRows.push("  GT" + drr + ": " + rowStr);
+        }
+        console.log(gtRows.join("\n"));
+        // Print full groundTruth map for reference
+        var fullGT = [];
+        for (var drr = 0; drr < rows; drr++) {
+          fullGT.push("  GT" + drr + ": " + JSON.stringify(groundTruth[drr]));
+        }
+        console.log("--- FULL GROUND TRUTH ---");
+        console.log(fullGT.join("\n"));
+        console.log("--- END ---");
+        console.groupEnd();
+      }
 
       if (!candidates.length) {
         stuckCount += 1;
