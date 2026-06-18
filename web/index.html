@@ -1,253 +1,224 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI Maze 可视化面板</title>
-    <link rel="stylesheet" href="./styles.css" />
-  </head>
-  <body class="intro-active">
-    <section id="introScreen" class="intro-screen" aria-label="开始界面">
-      <div class="intro-backdrop" aria-hidden="true">
-        <div class="intro-grid-lines"></div>
-        <div class="scanline"></div>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Maze Exploration</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body class="intro-active">
+
+<div id="void-bg"></div>
+<div id="scanlines"></div>
+<div id="chroma"></div>
+<div class="glow-orb glow-orb-a"></div>
+<div class="glow-orb glow-orb-b"></div>
+<div class="glow-orb glow-orb-c"></div>
+<div id="particles"></div>
+
+<div class="corner corner-tl"></div>
+<div class="corner corner-tr"></div>
+<div class="corner corner-bl"></div>
+<div class="corner corner-br"></div>
+
+<!-- ===== INTRO SCREEN ===== -->
+<section class="intro-screen" id="introScreen" aria-label="Intro">
+  <div class="intro-grid-bg" id="introMiniMap"></div>
+  <div class="intro-overlay"></div>
+  <div class="intro-content">
+    <div class="intro-copy">
+      <p class="eyebrow">Algorithm Arena</p>
+      <h1>MAZE EXPLORATION</h1>
+      <p class="intro-tagline">Greedy exploration × memory backtracking — navigate the fog of war, collect coins, defeat bosses, reach the exit.</p>
+      <div class="intro-stats">
+        <div><span>Map Size</span><strong id="introSize">--</strong></div>
+        <div><span>Planned Route</span><strong id="introRoute">--</strong></div>
+        <div><span>Bosses</span><strong id="introBoss">--</strong></div>
+      </div>
+      <button id="startGameBtn" class="start-btn" type="button" disabled>
+        <span>Enter Maze</span><span class="start-mark">▶</span>
+      </button>
+    </div>
+  </div>
+  <div class="intro-meta" id="introMeta">Loading map data...</div>
+  <div class="map-selector" id="mapSelector">
+    <button class="map-selector-trigger" id="mapSelectorTrigger">MAPS</button>
+  </div>
+</section>
+
+<!-- ===== MAIN GAME VIEW ===== -->
+<main class="app-shell">
+
+  <!-- TOP BAR -->
+  <div class="topbar-area">
+    <div class="brand-block">
+      <p class="eyebrow" style="margin-bottom:0;">AI Maze</p>
+      <span id="mapName" class="status-pill">maze_15_15.json</span>
+      <span id="runState" class="status-pill accent">Standby</span>
+    </div>
+    <div class="minimap-wrap">
+      <div class="minimap-ring"></div>
+      <div class="minimap-label" id="phaseLabel">Loading</div>
+    </div>
+  </div>
+
+  <!-- LEFT SIDEBAR -->
+  <div class="sidebar left" id="sidebarLeft">
+    <div class="sidebar-tab" id="sidebarLeftTab"><span>M<br>E<br>N<br>U</span></div>
+    <div class="sidebar-body">
+      <div class="sidebar-inner">
+      <div class="panel glass">
+        <div class="section-title">Metrics</div>
+        <div class="metrics-grid">
+          <div class="metric-tile"><span>Round</span><strong id="metricRound">0</strong></div>
+          <div class="metric-tile"><span>Coins</span><strong id="metricCoins">0</strong></div>
+          <div class="metric-tile"><span>Explored</span><strong id="metricExplored">0%</strong></div>
+          <div class="metric-tile"><span>Route</span><strong id="metricRoute">0</strong></div>
+        </div>
       </div>
 
-      <div class="intro-content">
-        <div class="intro-copy">
-          <p class="eyebrow">AI Maze Arena</p>
-          <h1>进入迷宫挑战</h1>
-          <p class="intro-tagline">收集金币，避开陷阱，击败 Boss，冲向出口。</p>
-
-          <div class="intro-stats" aria-label="地图概览">
-            <div>
-              <span>地图</span>
-              <strong id="introSize">--</strong>
-            </div>
-            <div>
-              <span>路径</span>
-              <strong id="introRoute">--</strong>
-            </div>
-            <div>
-              <span>Boss</span>
-              <strong id="introBoss">--</strong>
-            </div>
-          </div>
-
-          <button id="startGameBtn" class="start-btn" type="button">
-            <span>开始探索</span>
-            <span class="start-mark">›</span>
-          </button>
-          <button id="introImportBtn" class="intro-import-btn" type="button">
-            导入 JSON 地图
-          </button>
+      <div class="panel glass tool-section">
+        <div class="section-title">View Mode</div>
+        <div class="segmented-control" role="tablist">
+          <button type="button" class="segment active" data-mode="live">Live</button>
+          <button type="button" class="segment" data-mode="full">Full</button>
+          <button type="button" class="segment" data-mode="risk">Risk</button>
+          <button type="button" class="segment" data-mode="reward">Reward</button>
         </div>
-
-        <div class="intro-visual" aria-hidden="true">
-          <div class="intro-device">
-            <div class="device-top">
-              <span></span>
-              <span></span>
-              <span></span>
-            </div>
-            <div id="introMiniMap" class="intro-mini-map"></div>
-            <img class="intro-player" src="../viz/assets/player.png" alt="" />
-            <img class="intro-boss" src="../viz/assets/boss.png" alt="" />
-            <img class="intro-coin coin-a" src="../viz/assets/coin.png" alt="" />
-            <img class="intro-coin coin-b" src="../viz/assets/coin.png" alt="" />
-          </div>
-          <div id="introMeta" class="intro-meta">正在装载地图...</div>
+        <div class="toggle-grid">
+          <label class="toggle-field"><input id="toggleFog" type="checkbox" checked><span>Fog</span></label>
+          <label class="toggle-field"><input id="togglePath" type="checkbox" checked><span>Path</span></label>
+          <label class="toggle-field"><input id="toggleHeat" type="checkbox"><span>Heat</span></label>
+          <label class="toggle-field"><input id="toggleSprites" type="checkbox" checked><span>Sprites</span></label>
         </div>
       </div>
-    </section>
 
-    <main class="app-shell">
-      <aside class="panel control-panel" aria-label="迷宫控制台">
-        <div class="brand-block">
-          <p class="eyebrow">AI Maze Visualizer</p>
-          <h1>迷宫智能体回放</h1>
-          <div class="status-row">
-            <span id="mapName" class="status-pill">maze_15_15.json</span>
-            <span id="runState" class="status-pill accent">待机</span>
-          </div>
+      <div class="panel glass tool-section">
+        <div class="section-title">Map</div>
+        <div class="button-row">
+          <button id="loadDefaultBtn" type="button" class="secondary-btn">Default</button>
+          <label class="file-btn">Import<input id="fileInput" type="file" accept="application/json,.json"></label>
         </div>
+        <p id="mapMeta" class="meta-text">Loading...</p>
+      </div>
 
-        <section class="metrics-grid" aria-label="运行指标">
-          <div class="metric-tile">
-            <span>回合</span>
-            <strong id="metricRound">0</strong>
-          </div>
-          <div class="metric-tile">
-            <span>金币</span>
-            <strong id="metricCoins">0</strong>
-          </div>
-          <div class="metric-tile">
-            <span>探索</span>
-            <strong id="metricExplored">0%</strong>
-          </div>
-          <div class="metric-tile">
-            <span>路径</span>
-            <strong id="metricRoute">0</strong>
-          </div>
-        </section>
-
-        <section class="tool-section" aria-label="播放控制">
-          <div class="section-title">播放</div>
-          <div class="button-row">
-            <button id="resetBtn" type="button" class="icon-btn" aria-label="重置">↺</button>
-            <button id="prevBtn" type="button" class="icon-btn" aria-label="上一帧">‹</button>
-            <button id="playBtn" type="button" class="primary-btn" aria-label="播放或暂停">▶</button>
-            <button id="nextBtn" type="button" class="icon-btn" aria-label="下一帧">›</button>
-          </div>
-          <label class="range-field">
-            <span>进度</span>
-            <input id="timeline" type="range" min="0" max="0" value="0" />
-          </label>
-          <label class="range-field">
-            <span>速度</span>
-            <input id="speedRange" type="range" min="1" max="12" value="5" />
-            <output id="speedLabel">5x</output>
-          </label>
-        </section>
-
-        <section class="tool-section" aria-label="视图模式">
-          <div class="section-title">视图</div>
-          <div class="segmented-control" role="tablist" aria-label="显示模式">
-            <button type="button" class="segment active" data-mode="live">实况</button>
-            <button type="button" class="segment" data-mode="full">全图</button>
-            <button type="button" class="segment" data-mode="risk">风险</button>
-            <button type="button" class="segment" data-mode="reward">收益</button>
-          </div>
-
-          <div class="toggle-grid">
-            <label class="toggle-field">
-              <input id="toggleFog" type="checkbox" checked />
-              <span>迷雾</span>
-            </label>
-            <label class="toggle-field">
-              <input id="togglePath" type="checkbox" checked />
-              <span>路径</span>
-            </label>
-            <label class="toggle-field">
-              <input id="toggleHeat" type="checkbox" />
-              <span>热力</span>
-            </label>
-            <label class="toggle-field">
-              <input id="toggleSprites" type="checkbox" checked />
-              <span>贴图</span>
-            </label>
-          </div>
-        </section>
-
-        <section class="tool-section" aria-label="地图文件">
-          <div class="section-title">地图</div>
-          <div class="button-row">
-            <button id="loadDefaultBtn" type="button" class="secondary-btn">默认地图</button>
-            <label class="file-btn">
-              导入 JSON
-              <input id="fileInput" type="file" accept="application/json,.json" />
-            </label>
-          </div>
-          <p id="mapMeta" class="meta-text">正在加载地图数据...</p>
-        </section>
-
-        <section class="tool-section compare-section" aria-label="算法对比">
-          <div class="section-title">算法对比</div>
-          <button id="runCompareBtn" type="button" class="primary-btn" style="width:100%;margin-bottom:12px;">运行对比</button>
-          <div id="compareResults" class="compare-results" hidden></div>
-          <p class="meta-text" style="font-size:11px;color:var(--muted);margin-top:6px;">比较 3×3 局部贪心 vs 记忆增强全局贪心，指标：总分 / 总步数</p>
-        </section>
-      </aside>
-
-      <section class="stage-panel" aria-label="迷宫画布">
-        <div class="stage-topbar">
-          <div>
-            <p class="eyebrow">Canvas Replay</p>
-            <h2 id="phaseLabel">初始化</h2>
-          </div>
-          <div id="cellReadout" class="cell-readout">悬停查看格子</div>
-        </div>
-        <div class="canvas-frame">
-          <canvas id="mazeCanvas" width="960" height="960" aria-label="迷宫可视化画布"></canvas>
-          <div id="emptyMapPrompt" class="empty-map-prompt">
-            <p>请选择一张地图导入以开始游戏</p>
-            <button id="emptyImportBtn" type="button" class="empty-import-btn">导入 JSON 地图</button>
-          </div>
-        </div>
-      </section>
-
-      <aside class="panel insight-panel" aria-label="状态详情">
-        <section class="insight-section">
-          <div class="section-title">当前格子</div>
-          <dl class="detail-grid">
-            <div>
-              <dt>坐标</dt>
-              <dd id="tileCoord">-</dd>
-            </div>
-            <div>
-              <dt>类型</dt>
-              <dd id="tileType">-</dd>
-            </div>
-            <div>
-              <dt>权重</dt>
-              <dd id="tileWeight">-</dd>
-            </div>
-          </dl>
-        </section>
-
-        <section class="insight-section">
-          <div class="section-title">图例</div>
-          <div class="legend-grid" id="legendGrid"></div>
-        </section>
-
-        <section class="insight-section grow">
-          <div class="section-title">事件流</div>
-          <ol id="eventList" class="event-list"></ol>
-        </section>
-      </aside>
-    </main>
-
-    <div id="bossAlert" class="boss-alert" hidden aria-hidden="true">
-      <div class="boss-alert-line" aria-hidden="true"></div>
-      <section class="boss-alert-card" aria-label="Boss 战提示">
-        <span class="boss-alert-kicker">BOSS WARNING</span>
-        <strong id="bossAlertTitle">进入 Boss 战</strong>
-        <span id="bossAlertMeta">战斗链接已建立</span>
-      </section>
-      <div class="boss-alert-line" aria-hidden="true"></div>
+      <div class="panel glass tool-section compare-section">
+        <div class="section-title">Compare</div>
+        <button id="runCompareBtn" type="button" class="primary-btn" style="width:100%;margin-bottom:6px;">Run</button>
+        <div id="compareResults" class="compare-results" hidden></div>
+        <p class="meta-text" style="font-size:8px;">Local Greedy vs Global Greedy</p>
+      </div>
+      </div>
     </div>
+  </div>
 
-    <div id="bossWinAlert" class="boss-win-alert" hidden aria-hidden="true">
-      <section class="boss-win-card" aria-label="Boss 胜利提示">
-        <div class="win-trophy-stage" aria-hidden="true">
-          <span class="win-trophy trophy-left"><span></span></span>
-          <span class="win-trophy trophy-center"><span></span></span>
-          <span class="win-trophy trophy-right"><span></span></span>
-        </div>
-        <strong class="boss-win-word">WIN</strong>
-        <span id="bossWinMeta" class="boss-win-meta">Boss 已击败</span>
-      </section>
+  <!-- CENTER: MAZE CANVAS -->
+  <section class="stage-area">
+    <canvas id="mazeCanvas" width="960" height="960" aria-label="Maze canvas"></canvas>
+    <div id="emptyMapPrompt" class="empty-map-prompt">
+      <p>Click MAPS in the top-right to load a map</p>
+      <button id="emptyImportBtn" type="button" class="empty-import-btn">Import JSON Map</button>
     </div>
+  </section>
 
-    <div id="bossOverlay" class="boss-overlay" hidden aria-hidden="true">
-      <div class="boss-overlay-backdrop"></div>
-      <section class="boss-overlay-shell" aria-label="Boss 战斗层">
-        <div class="boss-overlay-topbar">
-          <div>
-            <p class="eyebrow">Combat Link</p>
-            <h2 id="bossOverlayTitle">Boss 战进行中</h2>
-          </div>
-          <button id="closeBossOverlayBtn" type="button" class="icon-btn" aria-label="关闭 Boss 战">×</button>
-        </div>
-        <iframe
-          id="bossOverlayFrame"
-          class="boss-overlay-frame"
-          title="Boss 战可视化"
-          loading="eager"
-        ></iframe>
-      </section>
+  <!-- RIGHT SIDEBAR -->
+  <div class="sidebar right" id="sidebarRight">
+    <div class="sidebar-tab" id="sidebarRightTab"><span>I<br>N<br>F<br>O</span></div>
+    <div class="sidebar-body">
+      <div class="sidebar-inner">
+      <div class="panel glass insight-section">
+        <div class="section-title">Current Tile</div>
+        <dl class="detail-grid">
+          <div><dt>Coord</dt><dd id="tileCoord">-</dd></div>
+          <div><dt>Type</dt><dd id="tileType">-</dd></div>
+          <div><dt>Weight</dt><dd id="tileWeight">-</dd></div>
+        </dl>
+      </div>
+
+      <div class="panel glass insight-section">
+        <div class="section-title">Legend</div>
+        <div class="legend-grid" id="legendGrid"></div>
+      </div>
+
+      <div class="panel glass insight-section grow">
+        <div class="section-title">Events</div>
+        <ol id="eventList" class="event-list"></ol>
+      </div>
+      </div>
     </div>
+  </div>
 
-    <script src="./app.js?v=20260526-local" defer></script>
-  </body>
+  <!-- BOTTOM BAR -->
+  <div class="bottombar-area">
+    <div id="cellReadout" class="cell-readout">Hover tile for info</div>
+    <div class="button-row">
+      <button id="resetBtn" type="button" class="icon-btn" aria-label="Reset">↺</button>
+      <button id="prevBtn" type="button" class="icon-btn" aria-label="Prev">◀</button>
+      <button id="playBtn" type="button" class="primary-btn" aria-label="Play/Pause">▶</button>
+      <button id="nextBtn" type="button" class="icon-btn" aria-label="Next">▶</button>
+      <label class="range-field" style="margin-top:0;">
+        <input id="timeline" type="range" min="0" max="0" value="0">
+      </label>
+      <label class="range-field" style="margin-top:0;">
+        <input id="speedRange" type="range" min="1" max="12" value="5">
+        <output id="speedLabel">5x</output>
+      </label>
+    </div>
+  </div>
+
+</main>
+
+<!-- ===== BOSS ALERTS ===== -->
+<div id="bossAlert" class="boss-alert" hidden aria-hidden="true">
+  <div class="boss-alert-line" aria-hidden="true"></div>
+  <section class="boss-alert-card">
+    <span class="boss-alert-kicker">BOSS ENCOUNTER</span>
+    <strong id="bossAlertTitle">Boss Encountered</strong>
+    <span id="bossAlertMeta">Combat link established</span>
+  </section>
+  <div class="boss-alert-line" aria-hidden="true"></div>
+</div>
+
+<div id="bossWinAlert" class="boss-win-alert" hidden aria-hidden="true">
+  <section class="boss-win-card">
+    <strong class="boss-win-word">VICTORY</strong>
+    <span id="bossWinMeta" class="boss-win-meta">Boss defeated</span>
+  </section>
+</div>
+
+<div id="bossOverlay" class="boss-overlay" hidden aria-hidden="true">
+  <div class="boss-overlay-backdrop"></div>
+  <section class="boss-overlay-shell">
+    <div class="boss-overlay-topbar">
+      <div>
+        <p class="eyebrow">Combat Link</p>
+        <h2 id="bossOverlayTitle">Boss Battle in progress</h2>
+      </div>
+      <button id="closeBossOverlayBtn" type="button" class="icon-btn" aria-label="关闭">✕</button>
+    </div>
+    <iframe id="bossOverlayFrame" class="boss-overlay-frame" title="Boss 战可视化" loading="eager"></iframe>
+  </section>
+</div>
+
+<script>
+(()=>{
+  var c=document.getElementById('particles');
+  var colors=['#ff2d95','#00e5ff','#ffaa00','#ff3355','#44ff88','#9b5de5','#00ffc8'];
+  var speeds=['drift','driftSlow','driftFast','driftTwinkle'];
+  var types=['dim','normal','bright','giant'];
+  for(var i=0;i<110;i++){
+    var p=document.createElement('div');
+    var typeIdx=Math.floor(Math.random()*types.length);
+    p.className='particle '+types[typeIdx];
+    p.style.left=Math.random()*100+'%';
+    p.style.background=colors[Math.floor(Math.random()*colors.length)];
+    p.style.animationName=speeds[Math.floor(Math.random()*speeds.length)];
+    p.style.animationDuration=(4+Math.random()*20)+'s';
+    p.style.animationDelay=Math.random()*16+'s';
+    c.appendChild(p);
+  }
+})();
+</script>
+<script src="./app.js" defer></script>
+</body>
 </html>

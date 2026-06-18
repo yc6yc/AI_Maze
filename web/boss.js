@@ -44,15 +44,15 @@
   ];
 
   const PHASE_LABELS = {
-    init: "等待开始",
-    idle: "等待技能冷却",
-    windup: "准备释放技能",
-    attack: "释放技能",
-    lunge: "技能飞向 Boss",
-    impact: "技能命中",
-    recover: "回合结束",
-    retry: "重新挑战 Boss",
-    failed: "挑战失败",
+    init: "Waiting to start",
+    idle: "Waiting for cooldown",
+    windup: "Preparing skill",
+    attack: "Releasing skill",
+    lunge: "Skill flying to Boss",
+    impact: "Skill hit",
+    recover: "Round ended",
+    retry: "Retrying Boss",
+    failed: "Challenge failed",
   };
 
   const els = {
@@ -159,7 +159,7 @@
       };
     }
     if (!payload || !Array.isArray(payload.PlayerSkills) || !Array.isArray(payload.B)) {
-      throw new Error("战斗参数缺失");
+      throw new Error("Combat parameters missing");
     }
     return {
       B: payload.B,
@@ -178,7 +178,7 @@
       if (!cached.data || !Array.isArray(cached.data.B) || !Array.isArray(cached.data.PlayerSkills)) return null;
       return {
         data: cached.data,
-        name: cached.name || "当前迷宫地图",
+        name: cached.name || "Current maze map",
       };
     } catch (error) {
       console.warn("Failed to read cached active map.", error);
@@ -211,24 +211,24 @@
     const minRounds = Number(data.minRouds ?? data.minRounds ?? 0);
     const coinConsumption = Number(data.CoinConsumption ?? data.coinConsumption ?? 0);
     if (!Number.isFinite(minRounds) || minRounds <= 0) {
-      throw new Error("minRouds 必须是正整数");
+      throw new Error("minRouds must be a positive integer");
     }
     if (!Number.isFinite(coinConsumption) || coinConsumption < 0) {
-      throw new Error("CoinConsumption 必须是非负数");
+      throw new Error("CoinConsumption must be non-negative");
     }
     const bossHps = data.B.map((value) => Number(value));
     if (!bossHps.length || bossHps.some((hp) => !Number.isFinite(hp) || hp <= 0)) {
-      throw new Error("B 必须是正整数数组");
+      throw new Error("B must be array of positive integers");
     }
     const skills = data.PlayerSkills.map((spec, index) => {
       if (!Array.isArray(spec) || spec.length < 2) {
-        throw new Error(`PlayerSkills[${index}] 格式错误`);
+        throw new Error(`PlayerSkills[${index}] format error`);
       }
       const damage = Number(spec[0]);
       const cooldown = Number(spec[1]);
       const remainingCd = Number(spec[2] ?? 0);
       if (!Number.isFinite(damage) || damage < 0 || !Number.isFinite(cooldown) || cooldown < 0 || !Number.isFinite(remainingCd) || remainingCd < 0) {
-        throw new Error(`PlayerSkills[${index}] 数值错误`);
+        throw new Error(`PlayerSkills[${index}] value error`);
       }
       return { damage, cooldown, remainingCd };
     });
@@ -281,23 +281,23 @@
     if (!frame) return PHASE_LABELS.init;
     if (frame.failed) return PHASE_LABELS.failed;
     if (frame.retry) return PHASE_LABELS.retry;
-    if (frame.defeated && frame.phase === "idle") return "Boss 已击败";
+    if (frame.defeated && frame.phase === "idle") return "Boss defeated";
     if (frame.skillIdx !== null) {
-      if (frame.phase === "windup") return `准备释放技能 S${frame.skillIdx}`;
-      if (frame.phase === "attack" || frame.phase === "lunge") return `释放技能 S${frame.skillIdx}`;
-      if (frame.phase === "impact") return `技能 S${frame.skillIdx} 命中`;
-      if (frame.phase === "recover") return `技能 S${frame.skillIdx} 结束`;
+      if (frame.phase === "windup") return `Preparing skill S${frame.skillIdx}`;
+      if (frame.phase === "attack" || frame.phase === "lunge") return `Releasing skill S${frame.skillIdx}`;
+      if (frame.phase === "impact") return `Skill S${frame.skillIdx} hit`;
+      if (frame.phase === "recover") return `Skill S${frame.skillIdx} ended`;
     }
-    return PHASE_LABELS[frame.phase] || "战斗中";
+    return PHASE_LABELS[frame.phase] || "In combat";
   }
 
   function eventLabel(frame) {
-    if (frame.failed) return `金币耗尽，Boss ${frame.bossIndex} 挑战失败`;
-    if (frame.retry) return `未在 ${frame.minRounds} 轮内击败 Boss，扣除 ${frame.coinConsumption} 金币后重试`;
-    if (frame.skillIdx === null) return `第 ${frame.attackRound} 轮等待，技能全部冷却中`;
-    if (frame.defeated && frame.phase === "impact") return `技能 S${frame.skillIdx} 命中 ${frame.damage}，Boss 被击败`;
-    if (frame.phase === "impact" && frame.damage > 0) return `技能 S${frame.skillIdx} 命中 ${frame.damage}`;
-    if (frame.phase === "windup") return `技能 S${frame.skillIdx} 蓄力`;
+    if (frame.failed) return `Coins exhausted, Boss ${frame.bossIndex} challenge failed`;
+    if (frame.retry) return `Failed to defeat Boss within ${frame.minRounds} rounds, -${frame.coinConsumption} coins, retrying`;
+    if (frame.skillIdx === null) return `Round ${frame.attackRound} waiting, all skills on cooldown`;
+    if (frame.defeated && frame.phase === "impact") return `Skill S${frame.skillIdx} hit ${frame.damage}, Boss defeated`;
+    if (frame.phase === "impact" && frame.damage > 0) return `Skill S${frame.skillIdx} hit ${frame.damage}`;
+    if (frame.phase === "windup") return `Skill S${frame.skillIdx} charging`;
     return "";
   }
 
@@ -406,8 +406,8 @@
           minRounds: config.minRounds,
           coinConsumption: config.coinConsumption,
           statusText: failed
-            ? `金币降为 0，Boss ${bossIndex} 挑战终止`
-            : `挑战超时，扣除 ${config.coinConsumption} 金币后继续挑战同一个 Boss`,
+            ? `Coins dropped to 0, Boss ${bossIndex} challenge terminated`
+            : `Challenge timeout, -${config.coinConsumption} coins, retrying same Boss`,
         });
 
         if (failed) {
@@ -436,7 +436,7 @@
     els.introBossCount.textContent = String(config.bossHps.length);
     els.introSkillCount.textContent = String(config.skills.length);
     els.introRoundCap.textContent = String(config.minRounds);
-    els.introMeta.textContent = `${state.mapName} / Boss ${config.bossHps.length} 个 / 失败扣币 ${config.coinConsumption}`;
+    els.introMeta.textContent = `${state.mapName} / ${config.bossHps.length} Bosses / Fail cost ${config.coinConsumption}`;
     if (els.startBattleBtn) {
       els.startBattleBtn.disabled = false;
     }
@@ -445,7 +445,7 @@
     config.skills.slice(0, 6).forEach((skill, index) => {
       const item = document.createElement("div");
       item.className = "intro-skill-chip";
-      item.innerHTML = `<strong>S${index}</strong><span>伤害 ${skill.damage}<br />冷却 ${skill.cooldown}</span>`;
+      item.innerHTML = `<strong>S${index}</strong><span>DMG ${skill.damage}<br />CD ${skill.cooldown}</span>`;
       els.introSkillPreview.appendChild(item);
     });
 
@@ -510,10 +510,10 @@
 
   function skillColor(index, alpha = 1) {
     const palette = [
-      [249, 115, 22],
-      [45, 212, 191],
-      [167, 139, 250],
-      [250, 204, 21],
+      [255, 45, 149],   // magenta
+      [0, 229, 255],     // cyan
+      [255, 170, 0],     // gold
+      [255, 51, 85],     // red
     ];
     const [r, g, b] = palette[index % palette.length];
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
@@ -592,10 +592,10 @@
   function drawEmptyState(message) {
     fitCanvas();
     ctx.clearRect(0, 0, state.layout.width, state.layout.height);
-    ctx.fillStyle = "#05060a";
+    ctx.fillStyle = "#06050a";
     ctx.fillRect(0, 0, state.layout.width, state.layout.height);
-    ctx.fillStyle = "#f5f7fb";
-    ctx.font = `${18 * state.layout.dpr}px sans-serif`;
+    ctx.fillStyle = "#7a7590";
+    ctx.font = `${14 * state.layout.dpr}px "Courier New", monospace`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(message, state.layout.width / 2, state.layout.height / 2);
@@ -765,11 +765,11 @@
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.strokeStyle = "rgba(0,229,255,0.55)";
     ctx.lineWidth = 2;
     ctx.stroke();
-    ctx.fillStyle = "#fff";
-    ctx.font = "800 28px sans-serif";
+    ctx.fillStyle = "#d8d5e8";
+    ctx.font = "800 24px 'Courier New', monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(label, x, y + 2);
@@ -1083,7 +1083,7 @@
     ctx.font = "800 12px sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText("技能栏", baseX, baseY - 12);
+    ctx.fillText("Skills", baseX, baseY - 12);
 
     frame.skills.slice(0, 5).forEach((skill, index) => {
       const x = baseX + index * 108;
@@ -1097,11 +1097,11 @@
       ctx.fillText(`S${index}`, x + 10, baseY + 16);
       ctx.font = "700 12px sans-serif";
       ctx.fillStyle = ready ? "#f8fafc" : "#94a3b8";
-      ctx.fillText(`伤害 ${skill.damage}`, x + 10, baseY + 31);
+      ctx.fillText(`DMG ${skill.damage}`, x + 10, baseY + 31);
       if (!ready) {
         ctx.fillStyle = "#94a3b8";
         ctx.textAlign = "right";
-        ctx.fillText(`冷却 ${skill.remainingCd}`, x + 82, baseY + 16);
+        ctx.fillText(`CD ${skill.remainingCd}`, x + 82, baseY + 16);
         ctx.textAlign = "left";
       }
     });
@@ -1126,7 +1126,7 @@
     drawGlow(playerX + 118, playerY + 178, 128, 104, "rgba(37, 99, 235, ALPHA)", 0.3 + energy * 0.12);
     drawGlow(bossX + 150, bossY + 190, 172, 142, "rgba(220, 38, 38, ALPHA)", 0.25 + energy * 0.24);
 
-    drawInfoBox(82, 92, 310, "玩家", `金币 ${frame.coins}`, "rgba(56, 189, 248, 0.42)");
+    drawInfoBox(82, 92, 310, "Player", `Coins ${frame.coins}`, "rgba(56, 189, 248, 0.42)");
     drawRoundedRect(536, 90, 270, 54, 12, "rgba(43, 10, 18, 0.72)", frame.defeated ? "rgba(34, 197, 94, 0.5)" : "rgba(251, 113, 133, 0.5)", 1.6);
     ctx.fillStyle = "#ffe4e6";
     ctx.font = "800 13px sans-serif";
@@ -1135,7 +1135,7 @@
     ctx.fillText("BOSS", 554, 108);
     ctx.fillStyle = frame.defeated ? "#bbf7d0" : "#fecaca";
     ctx.font = "900 18px sans-serif";
-    ctx.fillText(frame.defeated ? "已击败" : "状态未知", 554, 130);
+    ctx.fillText(frame.defeated ? "Defeated" : "Unknown", 554, 130);
 
     if (state.mode === "cooldown") {
       const readyCount = frame.skills.filter((skill) => skill.remainingCd === 0).length;
@@ -1193,37 +1193,37 @@
     ctx.textBaseline = "middle";
     ctx.fillStyle = "#e2e8f0";
     ctx.font = "800 13px sans-serif";
-    ctx.fillText(frame.skillIdx === null ? "当前动作：等待技能冷却" : `当前动作：释放技能 S${frame.skillIdx}`, 694, 602);
+    ctx.fillText(frame.skillIdx === null ? "Action: waiting for cooldown" : `Action: releasing skill S${frame.skillIdx}`, 694, 602);
     ctx.fillStyle = frame.damage > 0 ? "#fca5a5" : "#94a3b8";
-    ctx.fillText(`本次伤害：${frame.damage}`, 694, 626);
+    ctx.fillText(`Damage dealt: ${frame.damage}`, 694, 626);
   }
 
   function drawSidePanel(frame) {
-    const status = frame.failed ? "挑战失败" : frame.retry ? "准备重试" : frame.defeated ? "Boss 已击败" : frame.skillIdx === null ? "等待冷却" : `释放技能 S${frame.skillIdx}`;
+    const status = frame.failed ? "Challenge Failed" : frame.retry ? "Preparing Retry" : frame.defeated ? "Boss Defeated" : frame.skillIdx === null ? "Waiting Cooldown" : `Releasing Skill S${frame.skillIdx}`;
     const color = frame.failed ? "#ef4444" : frame.retry ? "#f59e0b" : frame.defeated ? "#22c55e" : "#60a5fa";
     drawRoundedRect(924, 164, 278, 62, 12, "rgba(2, 6, 23, 0.62)", color, 1.6);
     ctx.fillStyle = "#f8fafc";
     ctx.font = "700 18px sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText("当前战斗", 948, 128);
+    ctx.fillText("Current Battle", 948, 128);
     ctx.textAlign = "center";
     ctx.fillStyle = color;
     ctx.font = "900 23px sans-serif";
     ctx.fillText(status, 1062, 184);
     ctx.fillStyle = "#94a3b8";
     ctx.font = "700 12px sans-serif";
-    ctx.fillText(frame.damage > 0 ? `造成 ${frame.damage} 伤害` : "本回合未造成伤害", 1062, 207);
+    ctx.fillText(frame.damage > 0 ? `Dealt ${frame.damage} damage` : "No damage this round", 1062, 207);
 
     ctx.textAlign = "left";
     ctx.fillStyle = "#cbd5e1";
     ctx.font = "500 17px sans-serif";
-    ctx.fillText(`尝试 ${frame.attempt}`, 938, 262);
-    ctx.fillText(`回合 ${frame.attackRound}`, 1092, 262);
+    ctx.fillText(`Attempt ${frame.attempt}`, 938, 262);
+    ctx.fillText(`Round ${frame.attackRound}`, 1092, 262);
     ctx.fillText(`Boss ${frame.bossIndex}/${frame.bossTotal}`, 938, 310);
     ctx.fillStyle = "#f8fafc";
     ctx.font = "700 18px sans-serif";
-    ctx.fillText("技能冷却", 938, 356);
+    ctx.fillText("Skill Cooldowns", 938, 356);
 
     let skillY = 400;
     frame.skills.forEach((skill, index) => {
@@ -1241,9 +1241,9 @@
       ctx.font = "600 14px sans-serif";
       ctx.fillText(`S${index}`, 944, skillY - 1);
       ctx.fillStyle = "#cbd5e1";
-      ctx.fillText(`伤害 ${skill.damage}`, 990, skillY - 1);
+      ctx.fillText(`DMG ${skill.damage}`, 990, skillY - 1);
       ctx.fillStyle = ready ? "#22c55e" : "#94a3b8";
-      ctx.fillText(ready ? "可用" : `冷却 ${skill.remainingCd}`, 1092, skillY - 1);
+      ctx.fillText(ready ? "Ready" : `CD ${skill.remainingCd}`, 1092, skillY - 1);
       const ratio = skill.cooldown === 0 ? 1 : (skill.cooldown - skill.remainingCd) / skill.cooldown;
       drawProgressBar(1094, skillY + 6, 98, 10, ratio, ready ? "#22c55e" : "#64748b", "#111827");
       skillY += 52;
@@ -1260,7 +1260,7 @@
 
   function draw() {
     if (!state.frames.length) {
-      drawEmptyState("等待 Boss 战数据");
+      drawEmptyState("Waiting for boss battle data");
       return;
     }
     const frame = currentFrame();
@@ -1308,11 +1308,11 @@
       card.innerHTML = `
         <div class="skill-card-header">
           <strong>S${index}</strong>
-          <span class="skill-state ${skill.remainingCd === 0 ? "ready" : ""}">${skill.remainingCd === 0 ? "可用" : `冷却 ${skill.remainingCd}`}</span>
+          <span class="skill-state ${skill.remainingCd === 0 ? "ready" : ""}">${skill.remainingCd === 0 ? "Ready" : `CD ${skill.remainingCd}`}</span>
         </div>
         <div class="skill-card-meta">
-          <span>伤害 ${skill.damage}</span>
-          <span>冷却 ${skill.cooldown}</span>
+          <span>DMG ${skill.damage}</span>
+          <span>CD ${skill.cooldown}</span>
         </div>
         <div class="skill-bar">
           <div class="skill-bar-fill" style="width:${Math.max(0, Math.min(100, ratio * 100))}%"></div>
@@ -1324,23 +1324,23 @@
 
   function updateReadout(frame) {
     if (!frame) {
-      els.battleReadout.textContent = "等待战斗数据";
+      els.battleReadout.textContent = "Waiting for battle data";
       return;
     }
-    let action = frame.skillIdx === null ? "等待技能冷却" : `释放技能 S${frame.skillIdx}`;
-    if (frame.failed) action = "挑战失败";
-    else if (frame.retry) action = "准备重试";
-    else if (frame.defeated) action = "Boss 已击败";
-    els.battleReadout.textContent = `Boss ${frame.bossIndex} · 第 ${frame.attackRound} 回合 · ${action}`;
+    let action = frame.skillIdx === null ? "Waiting for cooldown" : `Releasing skill S${frame.skillIdx}`;
+    if (frame.failed) action = "Challenge failed";
+    else if (frame.retry) action = "Preparing retry";
+    else if (frame.defeated) action = "Boss defeated";
+    els.battleReadout.textContent = `Boss ${frame.bossIndex} · Round ${frame.attackRound} · ${action}`;
   }
 
   function updateUi() {
     const frame = currentFrame();
     if (!frame) {
-      els.runState.textContent = "待机";
+      els.runState.textContent = "Standby";
       return;
     }
-    els.runState.textContent = state.playing ? "播放中" : "已暂停";
+    els.runState.textContent = state.playing ? "Playing" : "Paused";
     els.metricBoss.textContent = `${frame.bossIndex} / ${frame.bossTotal}`;
     els.metricAttempt.textContent = String(frame.attempt);
     els.metricRound.textContent = String(frame.totalRound);
@@ -1351,9 +1351,9 @@
     els.detailBoss.textContent = `${frame.bossIndex} / ${frame.bossTotal}`;
     els.detailAttempt.textContent = String(frame.attempt);
     els.detailTurn.textContent = `${frame.attackRound} / ${frame.minRounds}`;
-    els.detailAction.textContent = frame.skillIdx === null ? "等待技能冷却" : `释放技能 S${frame.skillIdx}`;
+    els.detailAction.textContent = frame.skillIdx === null ? "Waiting for cooldown" : `Releasing skill S${frame.skillIdx}`;
     els.detailDamage.textContent = String(frame.damage);
-    els.detailBossHp.textContent = frame.failed ? "失败" : frame.retry ? "重试" : frame.defeated ? "已击败" : "未知";
+    els.detailBossHp.textContent = frame.failed ? "Failed" : frame.retry ? "Retry" : frame.defeated ? "Defeated" : "Unknown";
     updateReadout(frame);
     renderEvents();
     renderSkills(frame);
@@ -1367,7 +1367,7 @@
     }
     els.playBtn.textContent = "▶";
     if (state.frames.length) {
-      els.runState.textContent = "已暂停";
+      els.runState.textContent = "Paused";
     }
   }
 
@@ -1439,7 +1439,7 @@
     els.battleName.textContent = name;
     els.timeline.max = String(Math.max(0, state.frames.length - 1));
     els.timeline.value = "0";
-    els.mapMeta.textContent = `Boss ${state.mapData.bossHps.length} 个，技能 ${state.mapData.skills.length} 个，回合上限 ${state.mapData.minRounds}，失败扣币 ${state.mapData.coinConsumption}`;
+    els.mapMeta.textContent = `${state.mapData.bossHps.length} Bosses, ${state.mapData.skills.length} skills, ${state.mapData.minRounds} round limit, -${state.mapData.coinConsumption} coins on fail`;
     updateIntro(state.mapData);
     updateUi();
     draw();
@@ -1482,8 +1482,8 @@
       return;
     }
     if (window.location.protocol === "file:") {
-      initBattle(cloneData(DEFAULT_MAP_DATA), "内置示例地图");
-      els.mapMeta.textContent += "（本地文件模式）";
+      initBattle(cloneData(DEFAULT_MAP_DATA), "Built-in example map");
+      els.mapMeta.textContent += " (local file mode)";
       return;
     }
     for (const url of DEFAULT_MAP_CANDIDATES) {
@@ -1499,8 +1499,8 @@
       }
     }
     console.warn("Default boss map could not be loaded; using embedded map.");
-    initBattle(cloneData(DEFAULT_MAP_DATA), "内置示例地图");
-    els.mapMeta.textContent += "（本地文件模式）";
+    initBattle(cloneData(DEFAULT_MAP_DATA), "Built-in example map");
+    els.mapMeta.textContent += " (local file mode)";
   }
 
   function bindEvents() {
@@ -1570,7 +1570,7 @@
         const data = JSON.parse(await file.text());
         initBattle(data, file.name);
       } catch (error) {
-        els.mapMeta.textContent = `导入失败：${error.message}`;
+        els.mapMeta.textContent = `Import failed: ${error.message}`;
       } finally {
         els.fileInput.value = "";
       }
@@ -1587,7 +1587,7 @@
     document.body.classList.add("embed-mode");
     document.body.classList.remove("intro-active", "intro-leaving");
     window.addEventListener("message", handleEmbedMessage);
-    initBattle(cloneData(DEFAULT_MAP_DATA), "Boss 战待命");
+    initBattle(cloneData(DEFAULT_MAP_DATA), "Boss battle standby");
     stopPlayback();
     notifyEmbedReady();
   } else if (embeddedBattle) {
