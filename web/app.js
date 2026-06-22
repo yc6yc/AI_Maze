@@ -172,6 +172,15 @@
     toggleHeat: document.getElementById("toggleHeat"),
     toggleSprites: document.getElementById("toggleSprites"),
     mapMeta: document.getElementById("mapMeta"),
+    actorPlayer: document.getElementById("actorPlayer"),
+    actorBoss: document.getElementById("actorBoss"),
+    canvasStack: document.getElementById("canvasStack"),
+    battleEffects: document.getElementById("battleEffects"),
+    slashBeam: document.getElementById("slashBeam"),
+    damagePop: document.getElementById("damagePop"),
+    particleBurst: document.getElementById("particleBurst"),
+    battlePrompt: document.getElementById("battlePrompt"),
+    enterBattleBtn: document.getElementById("enterBattleBtn"),
     tileCoord: document.getElementById("tileCoord"),
     tileType: document.getElementById("tileType"),
     tileWeight: document.getElementById("tileWeight"),
@@ -186,6 +195,18 @@
     bossOverlayTitle: document.getElementById("bossOverlayTitle"),
     bossOverlayFrame: document.getElementById("bossOverlayFrame"),
     closeBossOverlayBtn: document.getElementById("closeBossOverlayBtn"),
+    battleDataBtn: document.getElementById("battleDataBtn"),
+    battleDataPanel: document.getElementById("battleDataPanel"),
+    closeBattleDataBtn: document.getElementById("closeBattleDataBtn"),
+    bdHit: document.getElementById("bdHit"),
+    bdPhase: document.getElementById("bdPhase"),
+    bdRound: document.getElementById("bdRound"),
+    bdCoins: document.getElementById("bdCoins"),
+    bdPlayerAction: document.getElementById("bdPlayerAction"),
+    bdBossAction: document.getElementById("bdBossAction"),
+    bdEffect: document.getElementById("bdEffect"),
+    bdScreen: document.getElementById("bdScreen"),
+    bdEventList: document.getElementById("bdEventList"),
   };
 
   const ctx = els.canvas.getContext("2d");
@@ -228,6 +249,10 @@
     compareResult: null,
     _originalFrames: null,
     _originalRoute: null,
+    battleDataOpen: false,
+    battleHitCount: 0,
+    battleTotalHits: 5,
+    battleEventLog: [],
     layout: {
       dpr: 1,
       width: 0,
@@ -271,6 +296,197 @@
     }
     state.lastEffectFrameIndex = null;
     state.pendingBossOutcome = null;
+  }
+
+  // ---- Actor panel & battle transition ----
+  function showActors() {
+    if (els.actorPlayer) els.actorPlayer.classList.add("visible");
+    if (els.actorBoss) els.actorBoss.classList.add("visible");
+  }
+  function hideActors() {
+    if (els.actorPlayer) els.actorPlayer.classList.remove("visible");
+    if (els.actorBoss) els.actorBoss.classList.remove("visible");
+  }
+  function showBattlePrompt() {
+    if (els.battlePrompt) els.battlePrompt.classList.remove("hidden");
+  }
+  function hideBattlePrompt() {
+    if (els.battlePrompt) els.battlePrompt.classList.add("hidden");
+  }
+  // ---- Real Boss Battle Animation (SVG actors + CSS) ----
+  function clearBattleClasses() {
+    if (els.actorPlayer) {
+      els.actorPlayer.classList.remove("battle-charge", "battle-dash", "battle-attack", "battle-recover", "melee-counter-hit");
+    }
+    if (els.actorBoss) {
+      els.actorBoss.classList.remove("battle-hit", "battle-defeated", "battle-dash");
+    }
+    if (els.slashBeam) els.slashBeam.classList.remove("animate");
+    if (els.damagePop) els.damagePop.classList.remove("animate");
+    if (els.particleBurst) els.particleBurst.classList.remove("animate");
+    if (els.battleEffects) els.battleEffects.classList.remove("active");
+    document.body.classList.remove("screen-shake");
+    document.body.classList.remove("melee-mode");
+  }
+
+  function resetHitClasses() {
+    if (els.actorPlayer) {
+      els.actorPlayer.classList.remove("battle-charge", "battle-dash", "battle-attack", "battle-recover", "melee-counter-hit");
+    }
+    if (els.actorBoss) {
+      els.actorBoss.classList.remove("battle-hit", "battle-defeated", "battle-dash");
+    }
+    if (els.slashBeam) els.slashBeam.classList.remove("animate");
+    if (els.damagePop) els.damagePop.classList.remove("animate");
+    if (els.particleBurst) els.particleBurst.classList.remove("animate");
+    document.body.classList.remove("screen-shake");
+  }
+
+  function startSvgBattleSequence() {
+    const player = els.actorPlayer;
+    const boss = els.actorBoss;
+    if (!player || !boss) return;
+
+    resetHitClasses();
+    if (els.battleEffects) els.battleEffects.classList.add("active");
+
+    const hits = 5;
+    const cycleMs = 5000;
+    let hit = 0;
+
+    function doOneHit() {
+      if (hit >= hits) {
+        // Final recovery
+        updateBattleData("Recovery", "Recovering", "Defeated", "None", "Stable");
+        setTimeout(function() {
+          resetHitClasses();
+          player.classList.add("battle-recover");
+          setTimeout(function() {
+            clearBattleClasses();
+            exitBattleMode();
+            startPlayback();
+          }, 2500);
+        }, 1000);
+        return;
+      }
+
+      state.battleHitCount = hit + 1;
+      resetHitClasses();
+      player.classList.add("battle-charge");
+      updateBattleData("Charge", "Charging sword", "Bracing", "Sword glow", "Stable");
+
+      // 2s charge → dash
+      setTimeout(function() {
+        player.classList.remove("battle-charge");
+        player.classList.add("battle-dash");
+        updateBattleData("Dash", "Lunging forward", "Bracing", "Dash", "Stable");
+      }, 2000);
+
+      // 3.2s dash → attack + slash beam + screen shake
+      setTimeout(function() {
+        player.classList.remove("battle-dash");
+        player.classList.add("battle-attack");
+        if (els.slashBeam) { els.slashBeam.classList.remove("animate"); void els.slashBeam.offsetWidth; els.slashBeam.classList.add("animate"); }
+        document.body.classList.add("screen-shake");
+        setTimeout(function() { document.body.classList.remove("screen-shake"); }, 600);
+        updateBattleData("Attack", "Slashing", "Hit", "Slash beam", "Shaking");
+      }, 3200);
+
+      // 3.8s boss hit + damage pop + particles
+      setTimeout(function() {
+        boss.classList.add("battle-hit");
+        if (els.damagePop) { els.damagePop.classList.remove("animate"); void els.damagePop.offsetWidth; els.damagePop.classList.add("animate"); }
+        if (els.particleBurst) { els.particleBurst.classList.remove("animate"); void els.particleBurst.offsetWidth; els.particleBurst.classList.add("animate"); }
+        updateBattleData("Impact", "Slash connected", "Staggering", "DMG + Particles", "Shaking");
+      }, 3800);
+
+      // Boss counter (40% on hit 3+)
+      if (hit >= 2 && Math.random() < 0.4) {
+        setTimeout(function() {
+          resetHitClasses();
+          boss.classList.add("battle-dash");
+          updateBattleData("Counter Windup", "Vulnerable", "Counter-attacking", "Boss lunge", "Stable");
+          setTimeout(function() {
+            player.classList.add("melee-counter-hit");
+            document.body.classList.add("screen-shake");
+            setTimeout(function() { document.body.classList.remove("screen-shake"); }, 600);
+            updateBattleData("Counter Hit!", "Knocked back", "Counter strike", "Knockback", "Shaking");
+            setTimeout(function() {
+              resetHitClasses();
+              hit++;
+              doOneHit();
+            }, 1600);
+          }, 800);
+        }, 4300);
+      } else {
+        setTimeout(function() {
+          boss.classList.remove("battle-hit");
+          player.classList.remove("battle-attack");
+          hit++;
+          doOneHit();
+        }, cycleMs);
+      }
+    }
+
+    doOneHit();
+  }
+
+  function updateBattleData(phase, playerAction, bossAction, effect, screen) {
+    if (!els.bdHit) return;
+    els.bdHit.textContent = state.battleHitCount + " / " + state.battleTotalHits;
+    els.bdPhase.textContent = phase || "Idle";
+    var frame = state.frames[state.frameIndex];
+    els.bdRound.textContent = frame ? String(frame.round || 0) : "0";
+    els.bdCoins.textContent = frame ? String(frame.coins || 0) : "0";
+    els.bdPlayerAction.textContent = playerAction || "Idle";
+    els.bdBossAction.textContent = bossAction || "Idle";
+    els.bdEffect.textContent = effect || "None";
+    els.bdScreen.textContent = screen || "Stable";
+
+    if (phase && phase !== "Idle") {
+      var msg = "[" + state.battleHitCount + "] " + (playerAction || phase);
+      if (bossAction && bossAction !== "Idle") msg += " / Boss: " + bossAction;
+      if (effect && effect !== "None") msg += " / " + effect;
+      state.battleEventLog.unshift(msg);
+      if (state.battleEventLog.length > 30) state.battleEventLog.pop();
+      renderBattleEvents();
+    }
+  }
+
+  function renderBattleEvents() {
+    if (!els.bdEventList) return;
+    els.bdEventList.innerHTML = "";
+    state.battleEventLog.forEach(function(msg, i) {
+      var li = document.createElement("li");
+      li.innerHTML = '<span class="event-round" style="color:var(--cyan);font-weight:700;min-width:24px;">' + (i + 1) + "</span><span style='color:var(--text-dim);'>" + msg + "</span>";
+      els.bdEventList.appendChild(li);
+    });
+  }
+
+  function toggleBattleDataPanel() {
+    state.battleDataOpen = !state.battleDataOpen;
+    if (els.battleDataPanel) els.battleDataPanel.classList.toggle("hidden", !state.battleDataOpen);
+  }
+
+  function enterBattleMode() {
+    hideBattlePrompt();
+    if (els.canvasStack) els.canvasStack.classList.add("hidden");
+    document.body.classList.add("melee-mode");
+    state.battleHitCount = 0;
+    state.battleEventLog = [];
+    if (els.battleDataBtn) els.battleDataBtn.hidden = false;
+    bgmCrossfade(bgmEls.boss);
+    startSvgBattleSequence();
+  }
+
+  function exitBattleMode() {
+    clearBattleClasses();
+    if (els.canvasStack) els.canvasStack.classList.remove("hidden");
+    if (els.battleDataBtn) els.battleDataBtn.hidden = true;
+    if (els.battleDataPanel) els.battleDataPanel.classList.add("hidden");
+    state.battleDataOpen = false;
+    bgmCrossfade(bgmEls.maze);
+    draw();
   }
 
   function clearBossAlert() {
@@ -1432,35 +1648,55 @@
     var winnerB = cr.winner === "B";
 
     panel.innerHTML =
-      '<div class="compare-header">Algorithm Comparison</div>' +
+      '<div class="compare-header">' +
+        '<span class="compare-header-kicker">ALGORITHM ARENA</span>' +
+        '<span class="compare-header-title">Algorithm Comparison</span>' +
+        '<span class="compare-header-sub">Local Greedy <span class="diamond-sep">◆</span> Global Greedy</span>' +
+      '</div>' +
       '<div class="compare-cards">' +
-        buildCompareCard("Algorithm A · Pure 3x3 Local Greedy", a, cr.timeA, winnerA, "Only sees 3x3 window, O(1)/step") +
-        buildCompareCard("Algorithm B · Memory-Enhanced Global Greedy", b, cr.timeB, winnerB, "Dijkstra on all revealed tiles, O(R log R)/step") +
+        buildCompareCard("A", "Algorithm A · Pure 3x3 Local Greedy", a, cr.timeA, winnerA, "Only sees 3x3 window, O(1)/step") +
+        '<div class="compare-vs"><span>VS</span><i class="compare-vs-diamond"></i></div>' +
+        buildCompareCard("B", "Algorithm B · Memory-Enhanced Global Greedy", b, cr.timeB, winnerB, "Dijkstra on all revealed tiles, O(R log R)/step") +
       '</div>' +
       '<div class="compare-actions">' +
-        '<button class="secondary-btn" data-compare-view="A">View Algo A Path</button>' +
-        '<button class="secondary-btn" data-compare-view="B">View Algo B Path</button>' +
-        '<button class="secondary-btn" data-compare-view="original">View Original Plan</button>' +
+        '<button class="secondary-btn" data-compare-view="A"><span class="compare-action-mark">◆</span>View Algo A Path</button>' +
+        '<button class="secondary-btn" data-compare-view="B"><span class="compare-action-mark">◆</span>View Algo B Path</button>' +
+        '<button class="secondary-btn" data-compare-view="original"><span class="compare-action-mark">◇</span>View Original Plan</button>' +
       '</div>';
 
     panel.hidden = false;
+
+    var overlay = document.getElementById("compareOverlay");
+    if (overlay) {
+      overlay.hidden = false;
+      overlay.classList.remove("is-visible");
+      void overlay.offsetWidth;
+      overlay.classList.add("is-visible");
+    }
   }
 
-  function buildCompareCard(title, result, timeMs, isWinner, desc) {
+  function buildCompareCard(letter, title, result, timeMs, isWinner, desc) {
     var winnerClass = isWinner ? " compare-winner" : "";
-    var winnerBadge = isWinner ? '<span class="compare-badge">WINNER</span>' : "";
+    var letterClass = " compare-card-" + letter.toLowerCase();
+    var winnerBadge = isWinner ? '<span class="compare-badge"><i></i>WINNER</span>' : "";
     var scoreFormatted = result.score.toFixed(2);
 
     return (
-      '<div class="compare-card' + winnerClass + '">' +
-        '<div class="compare-card-title">' + title + winnerBadge + '</div>' +
-        '<div class="compare-card-desc">' + desc + '</div>' +
+      '<div class="compare-card' + winnerClass + letterClass + '">' +
+        '<div class="compare-card-head">' +
+          '<span class="compare-card-letter">' + letter + '</span>' +
+          '<div class="compare-card-titles">' +
+            '<div class="compare-card-title">' + title + '</div>' +
+            '<div class="compare-card-desc">' + desc + '</div>' +
+          '</div>' +
+          winnerBadge +
+        '</div>' +
         '<div class="compare-metrics">' +
           '<div class="compare-metric"><span>总分/总步数</span><strong>' + scoreFormatted + '</strong></div>' +
           '<div class="compare-metric"><span>总步数</span><strong>' + result.totalSteps + '</strong></div>' +
           '<div class="compare-metric"><span>Final Coins</span><strong>' + result.coins + '</strong></div>' +
           '<div class="compare-metric"><span>Bosses Defeated</span><strong>' + (result.bossDefeated || 0) + '</strong></div>' +
-          '<div class="compare-metric"><span>耗时</span><strong>' + timeMs.toFixed(0) + ' ms</strong></div>' +
+          '<div class="compare-metric compare-metric-wide"><span>耗时</span><strong>' + timeMs.toFixed(0) + ' ms</strong></div>' +
         '</div>' +
       '</div>'
     );
@@ -1557,6 +1793,7 @@
     updateUi();
     fitCanvas();
     draw();
+    showActors();
   }
 
   function validateMap(data) {
@@ -1808,7 +2045,7 @@
     if (cell === "B") return "boss";
     if (cell === "T") return "trap";
     if (cell === "C" || cell === "G") return "coin";
-    return "path";
+    return "";
   }
 
   function fitCanvas() {
@@ -1886,6 +2123,7 @@
       drawFocus(frame);
       drawEffects(frame);
       drawHover();
+      drawPaperGrain();
     } catch (e) {
       console.warn("Draw error:", e);
     }
@@ -1911,12 +2149,12 @@
     // Clear to transparent so CSS deep-space background shows through
     ctx.clearRect(0, 0, state.layout.width, state.layout.height);
     if (!tile) return;
-    // Grid dots at every cell center — matching maze-ui.html style
+    // Warm paper grain dots at every cell center (sumi-e style)
     for (var r = 0; r < rows; r++) {
       for (var c = 0; c < cols; c++) {
         var cx = ox + c * tile + tile/2;
         var cy = oy + r * tile + tile/2;
-        ctx.fillStyle = "rgba(0,229,255,0.03)";
+        ctx.fillStyle = 'rgba(170, 160, 150, 0.065)';
         ctx.fillRect(cx - 0.5, cy - 0.5, 1, 1);
       }
     }
@@ -1937,59 +2175,82 @@
     }
   }
 
+  // ============================================================
+  // Watercolor / Sumi-e ink-wash helpers (Gris + Okami style)
+  // ============================================================
+  function cellRand(r, c, seed) {
+    var n = Math.sin(r * 12.9898 + c * 78.233 + seed * 43.123) * 43758.5453;
+    return n - Math.floor(n);
+  }
+  function inkWash(x, y, w, h, cx, cy, r0, r1, stops) {
+    var grad = ctx.createRadialGradient(cx, cy, r0, cx, cy, r1);
+    stops.forEach(function(s) { grad.addColorStop(s[0], s[1]); });
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, w, h);
+  }
+
   function drawTile(r, c, cell, frame) {
     const { originX, originY, tile, dpr } = state.layout;
     const x = originX + c * tile;
     const y = originY + r * tile;
 
     if (cell === null) {
-      // Fog — deep void (matching maze-ui.html: rgba(6,5,10,0.95))
-      ctx.fillStyle = "rgba(6,5,10,0.95)";
-      ctx.fillRect(x, y, tile, tile);
-      // Subtle white grid dot in fog
-      ctx.fillStyle = "rgba(255,255,255,0.02)";
-      ctx.fillRect(x + tile/2 - 0.5, y + tile/2 - 0.5, 1, 1);
+      // Fog — dark paper with faint grain dot only
+      var fcx = x + tile/2, fcy = y + tile/2;
+      var grain = ctx.createRadialGradient(fcx, fcy, 0, fcx, fcy, tile*0.08);
+      grain.addColorStop(0, 'rgba(180, 170, 160, 0.04)');
+      grain.addColorStop(1, 'rgba(180, 170, 160, 0)');
+      ctx.fillStyle = grain;
+      ctx.fillRect(x + tile*0.35, y + tile*0.35, tile*0.3, tile*0.3);
       return;
     }
 
-    const floorAsset = state.assets.floor;
-    const wallAsset = state.assets.wall;
+    // Organic offset for watercolor bleeding (deterministic per cell)
+    var offX = (cellRand(r, c, 1) - 0.5) * tile * 0.35;
+    var offY = (cellRand(r, c, 2) - 0.5) * tile * 0.35;
+    var bleed = tile * 0.75; // how far color bleeds past cell edge
 
     if (cell === "#") {
-      if (state.showSprites && wallAsset && wallAsset.complete) {
-        ctx.drawImage(wallAsset, x, y, tile, tile);
-      } else {
-        // Wall — matching maze-ui.html exactly
-        ctx.fillStyle = "#14101f";
-        ctx.fillRect(x, y, tile, tile);
-        // Inner panel
-        ctx.fillStyle = "#1a1528";
-        ctx.fillRect(x + tile*0.15, y + tile*0.15, tile*0.7, tile*0.7);
-        // Center dot
-        ctx.fillStyle = "rgba(0,229,255,0.04)";
-        ctx.fillRect(x + tile/2 - 0.5, y + tile/2 - 0.5, 1, 1);
-        // Edge highlight
-        ctx.strokeStyle = "rgba(0,229,255,0.06)";
-        ctx.lineWidth = 0.5 * dpr;
-        ctx.strokeRect(x + 0.5, y + 0.5, tile - 1, tile - 1);
-      }
+      // Wall — continuous watercolor block with smooth organic color variation
+      // Smooth global gradient across the entire wall mass
+      var rows = state.grid.length, cols = state.grid[0].length;
+      var nx = c / Math.max(1, cols - 1); // 0 ~ 1 left-to-right
+      var ny = r / Math.max(1, rows - 1); // 0 ~ 1 top-to-bottom
+      var br = 60 + nx * 70 + ny * 30;
+      var bg = 55 + nx * 40 + ny * 50;
+      var bb = 95 + nx * 55 + ny * 45;
+      ctx.fillStyle = 'rgba(' + (br|0) + ',' + (bg|0) + ',' + (bb|0) + ',0.95)';
+      ctx.fillRect(x - 0.5, y - 0.5, tile + 1, tile + 1);
+
+
     } else {
-      if (state.showSprites && floorAsset && floorAsset.complete) {
-        ctx.drawImage(floorAsset, x, y, tile, tile);
-      } else {
-        // Floor — dark blue-purple
-        ctx.fillStyle = "#0a0818";
-        ctx.fillRect(x, y, tile, tile);
-        // Grid dot
-        ctx.fillStyle = "rgba(0,229,255,0.08)";
-        ctx.fillRect(x + tile/2 - 0.5, y + tile/2 - 0.5, 1, 1);
-      }
+      // Floor — brighter base so corridors are clearly visible against deep-space bg
+      var fcx = x + tile/2 + offX*0.2, fcy = y + tile/2 + offY*0.2;
+      // Solid base wash (noticeably lighter than background)
+      ctx.fillStyle = 'rgba(58, 54, 80, 0.45)';
+      ctx.fillRect(x, y, tile, tile);
+      // Soft watercolor center variation
+      inkWash(x, y, tile, tile,
+        fcx, fcy, 0, tile*0.32,
+        [[0, 'rgba(68, 64, 92, 0.22)'],
+         [0.6, 'rgba(60, 56, 84, 0.10)'],
+         [1, 'rgba(52, 48, 76, 0)']]);
+
+      // Grain dot
+      var grain = ctx.createRadialGradient(fcx, fcy, 0, fcx, fcy, tile*0.1);
+      grain.addColorStop(0, 'rgba(185, 175, 165, 0.20)');
+      grain.addColorStop(1, 'rgba(185, 175, 165, 0)');
+      ctx.fillStyle = grain;
+      ctx.fillRect(x + tile*0.3, y + tile*0.3, tile*0.4, tile*0.4);
 
       const isVisited = state.route.length && state.route.slice(0, state.frameIndex + 1).some(function(p) { return p.r === r && p.c === c; });
       if (isVisited) {
-        // Visited path — subtle cyan wash (matching maze-ui.html)
-        ctx.fillStyle = "rgba(0,229,255,0.03)";
-        ctx.fillRect(x, y, tile, tile);
+        // Visited path — stronger rose tint
+        inkWash(x, y, tile, tile,
+          x + tile/2 + offX*0.3, y + tile/2 + offY*0.3, 0, tile*0.35,
+          [[0, 'rgba(200, 110, 138, 0.28)'],
+           [0.6, 'rgba(175, 95, 120, 0.14)'],
+           [1, 'rgba(150, 80, 105, 0)']]);
       }
     }
 
@@ -2001,11 +2262,15 @@
     var iconR = tile * 0.2;
 
     if (cell === "S") {
-      // Start — cyan background + diamond outline (matching maze-ui.html)
-      ctx.fillStyle = "rgba(0,229,255,0.12)";
-      ctx.fillRect(x, y, tile, tile);
-      ctx.strokeStyle = "rgba(0,229,255,0.4)";
-      ctx.lineWidth = 1 * dpr;
+      // Start — bright teal ink spot + sumi-e diamond
+      inkWash(x - tile*0.1, y - tile*0.1, tile*1.2, tile*1.2,
+        cx + (cellRand(0,0,5)-0.5)*tile*0.15, cy + (cellRand(0,0,6)-0.5)*tile*0.15,
+        0, tile*0.45,
+        [[0, 'rgba(100, 210, 210, 0.50)'],
+         [0.5, 'rgba(80, 180, 180, 0.26)'],
+         [1, 'rgba(60, 150, 150, 0)']]);
+      ctx.strokeStyle = 'rgba(140, 235, 235, 0.85)';
+      ctx.lineWidth = 1.4 * dpr;
       ctx.beginPath();
       ctx.moveTo(cx, cy - iconR);
       ctx.lineTo(cx + iconR, cy);
@@ -2014,28 +2279,42 @@
       ctx.closePath();
       ctx.stroke();
     } else if (cell === "E") {
-      // Exit — gold background + square (matching maze-ui.html)
-      ctx.fillStyle = "rgba(255,170,0,0.1)";
-      ctx.fillRect(x, y, tile, tile);
-      var es = tile * 0.22;
-      ctx.fillStyle = "rgba(255,170,0,0.35)";
-      ctx.fillRect(cx - es, cy - es, es*2, es*2);
+      // Exit — bright amber ink spot + square core
+      inkWash(x - tile*0.1, y - tile*0.1, tile*1.2, tile*1.2,
+        cx + (cellRand(0,0,7)-0.5)*tile*0.15, cy + (cellRand(0,0,8)-0.5)*tile*0.15,
+        0, tile*0.45,
+        [[0, 'rgba(220, 175, 105, 0.45)'],
+         [0.5, 'rgba(190, 150, 85, 0.24)'],
+         [1, 'rgba(160, 125, 65, 0)']]);
+      var es = tile * 0.24;
+      inkWash(cx - es*2, cy - es*2, es*4, es*4,
+        cx, cy, 0, es*1.3,
+        [[0, 'rgba(245, 200, 125, 0.78)'],
+         [1, 'rgba(245, 200, 125, 0)']]);
     } else if (cell === "B") {
-      // Boss — red background + hexagon text (matching maze-ui.html)
-      ctx.fillStyle = "rgba(255,51,85,0.1)";
-      ctx.fillRect(x, y, tile, tile);
-      ctx.fillStyle = "rgba(255,51,85,0.45)";
-      ctx.font = `${tile*0.6}px monospace`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("⬡", cx, cy);
+      // Boss — bright crimson ink spot + hex glyph
+      inkWash(x - tile*0.1, y - tile*0.1, tile*1.2, tile*1.2,
+        cx + (cellRand(0,0,9)-0.5)*tile*0.15, cy + (cellRand(0,0,10)-0.5)*tile*0.15,
+        0, tile*0.45,
+        [[0, 'rgba(210, 85, 85, 0.42)'],
+         [0.5, 'rgba(180, 70, 70, 0.22)'],
+         [1, 'rgba(150, 55, 55, 0)']]);
+      ctx.fillStyle = 'rgba(235, 110, 110, 0.90)';
+      ctx.font = `${tile*0.55}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('⬡', cx, cy);
     } else if (cell === "T") {
-      // Trap — amber background + X mark (matching maze-ui.html)
-      ctx.fillStyle = "rgba(255,119,0,0.08)";
-      ctx.fillRect(x, y, tile, tile);
-      ctx.strokeStyle = "rgba(255,119,0,0.35)";
-      ctx.lineWidth = 1 * dpr;
-      var ts = tile * 0.15;
+      // Trap — bright ochre ink spot + X mark
+      inkWash(x - tile*0.1, y - tile*0.1, tile*1.2, tile*1.2,
+        cx + (cellRand(0,0,11)-0.5)*tile*0.15, cy + (cellRand(0,0,12)-0.5)*tile*0.15,
+        0, tile*0.45,
+        [[0, 'rgba(210, 170, 75, 0.38)'],
+         [0.5, 'rgba(180, 145, 60, 0.20)'],
+         [1, 'rgba(150, 120, 48, 0)']]);
+      ctx.strokeStyle = 'rgba(225, 185, 85, 0.75)';
+      ctx.lineWidth = 1.2 * dpr;
+      var ts = tile * 0.14;
       ctx.strokeRect(cx - ts, cy - ts, ts*2, ts*2);
       ctx.beginPath();
       ctx.moveTo(cx - ts, cy - ts);
@@ -2044,13 +2323,17 @@
       ctx.lineTo(cx - ts, cy + ts);
       ctx.stroke();
     } else if (cell === "C" || cell === "G") {
-      // Coin — gold background + circle (matching maze-ui.html)
-      ctx.fillStyle = "rgba(255,170,0,0.2)";
-      ctx.fillRect(x, y, tile, tile);
-      ctx.fillStyle = "rgba(255,170,0,0.65)";
-      ctx.beginPath();
-      ctx.arc(cx, cy, tile*0.12, 0, Math.PI*2);
-      ctx.fill();
+      // Coin — bright gold ink spot + strong glowing core
+      inkWash(x - tile*0.1, y - tile*0.1, tile*1.2, tile*1.2,
+        cx + (cellRand(0,0,13)-0.5)*tile*0.15, cy + (cellRand(0,0,14)-0.5)*tile*0.15,
+        0, tile*0.45,
+        [[0, 'rgba(230, 195, 80, 0.45)'],
+         [0.5, 'rgba(200, 170, 65, 0.24)'],
+         [1, 'rgba(170, 145, 50, 0)']]);
+      inkWash(cx - tile*0.2, cy - tile*0.2, tile*0.4, tile*0.4,
+        cx, cy, 0, tile*0.2,
+        [[0, 'rgba(255, 225, 120, 0.92)'],
+         [1, 'rgba(255, 225, 120, 0)']]);
     }
   }
 
@@ -2068,22 +2351,17 @@
           var nr = r + dirs[d][0], nc = c + dirs[d][1];
           if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && !shouldReveal(frame, nr, nc)) {
             var fx = originX + c * tile, fy = originY + r * tile;
-            var gx = fx, gy = fy, gw = tile, gh = tile;
-            if (dirs[d][1] === -1) { gx = fx + tile*0.6; gw = tile*0.4; }
-            if (dirs[d][1] === 1)  { gw = tile*0.4; }
-            if (dirs[d][0] === -1) { gy = fy + tile*0.6; gh = tile*0.4; }
-            if (dirs[d][0] === 1)  { gh = tile*0.4; }
-            var grad = ctx.createLinearGradient(
-              dirs[d][1] === -1 ? fx + tile : dirs[d][1] === 1 ? fx : fx,
-              dirs[d][0] === -1 ? fy + tile : dirs[d][0] === 1 ? fy : fy,
-              dirs[d][1] === -1 ? fx : dirs[d][1] === 1 ? fx + tile : fx,
-              dirs[d][0] === -1 ? fy : dirs[d][0] === 1 ? fy + tile : fy
-            );
-            // Soft cyan glow at fog boundary (matching maze-ui.html)
-            grad.addColorStop(0, "rgba(0,229,255,0.12)");
-            grad.addColorStop(1, "rgba(0,229,255,0)");
-            ctx.fillStyle = grad;
-            ctx.fillRect(gx, gy, gw, gh);
+            var ex = fx + tile*0.5, ey = fy + tile*0.5;
+            if (dirs[d][1] === -1) ex = fx;
+            if (dirs[d][1] === 1)  ex = fx + tile;
+            if (dirs[d][0] === -1) ey = fy;
+            if (dirs[d][0] === 1)  ey = fy + tile;
+            // Ink-wash glow at fog boundary (visible warm gray)
+            var glow = ctx.createRadialGradient(ex, ey, 0, ex, ey, tile*0.4);
+            glow.addColorStop(0, 'rgba(160, 150, 175, 0.22)');
+            glow.addColorStop(1, 'rgba(160, 150, 175, 0)');
+            ctx.fillStyle = glow;
+            ctx.fillRect(ex - tile*0.4, ey - tile*0.4, tile*0.8, tile*0.8);
           }
         }
       }
@@ -2093,27 +2371,28 @@
   function drawPath(frame) {
     const { originX, originY, tile } = state.layout;
 
-    // Visited path cell overlays (matching maze-ui.html)
+    // Visited path cell overlays — diluted rose ink wash
     if (frame && state.frameIndex >= 0) {
       for (var i = 0; i <= state.frameIndex; i++) {
         var p = state.route[i];
-        if (state.grid[p.r] && state.grid[p.r][p.c] !== "#") {
-          ctx.fillStyle = "rgba(255,45,149,0.1)";
-        } else {
-          ctx.fillStyle = "rgba(255,45,149,0.08)";
-        }
-        ctx.fillRect(originX + p.c * tile, originY + p.r * tile, tile, tile);
+        var px = originX + p.c * tile + tile/2;
+        var py = originY + p.r * tile + tile/2;
+        var offX = (cellRand(p.r, p.c, 20) - 0.5) * tile * 0.25;
+        var offY = (cellRand(p.r, p.c, 21) - 0.5) * tile * 0.25;
+        var baseAlpha = (state.grid[p.r] && state.grid[p.r][p.c] !== "#") ? 0.07 : 0.04;
+        inkWash(px - tile*0.5, py - tile*0.5, tile, tile,
+          px + offX, py + offY, 0, tile*0.55,
+          [[0, 'rgba(170, 90, 110, ' + baseAlpha + ')'],
+           [0.5, 'rgba(140, 70, 90, ' + (baseAlpha*0.5) + ')'],
+           [1, 'rgba(110, 50, 70, 0)']]);
       }
     }
 
     var toPoint = function(pos) { return { x: originX + pos.c * tile + tile/2, y: originY + pos.r * tile + tile/2 }; };
-    if (state.route.length > 1) {
-      // Full planned route — faint cyan ghost line (matching maze-ui.html)
-      drawRouteSegment(state.route, 0, state.route.length - 1, "rgba(0,229,255,0.12)", Math.max(2, tile*0.1), toPoint);
-    }
+
     if (frame) {
-      // Traveled route — magenta line (matching maze-ui.html, no shadowBlur)
-      drawRouteSegment(state.route, 0, state.frameIndex, "rgba(255,45,149,0.7)", Math.max(2.5, tile*0.12), toPoint);
+      // Traveled route — strong rose ink line
+      drawRouteSegment(state.route, 0, state.frameIndex, 'rgba(195, 110, 140, 0.85)', Math.max(3, tile*0.14), toPoint);
     }
   }
 
@@ -2147,10 +2426,10 @@
     const y = originY + pr * tile;
     const cx = x + tile / 2, cy = y + tile / 2;
 
-    // Player ambient glow — single radial gradient (matching maze-ui.html)
+    // Player ambient glow — bright rose ink wash
     var glowGrad = ctx.createRadialGradient(cx, cy, tile*0.1, cx, cy, tile*0.8);
-    glowGrad.addColorStop(0, "rgba(255,45,149,0.25)");
-    glowGrad.addColorStop(1, "rgba(255,45,149,0)");
+    glowGrad.addColorStop(0, 'rgba(210, 110, 145, 0.35)');
+    glowGrad.addColorStop(1, 'rgba(210, 110, 145, 0)');
     ctx.fillStyle = glowGrad;
     ctx.fillRect(x - tile*0.3, y - tile*0.3, tile*1.6, tile*1.6);
 
@@ -2158,11 +2437,11 @@
     if (state.showSprites && player && player.complete) {
       ctx.drawImage(player, x + tile*0.08, y + tile*0.08, tile*0.84, tile*0.84);
     } else {
-      // Player diamond — matching maze-ui.html
+      // Player diamond — bright sumi-e ink style (crimson)
       ctx.save();
-      ctx.shadowColor = "#ff2d95";
+      ctx.shadowColor = 'rgba(200, 90, 125, 0.45)';
       ctx.shadowBlur = 10 * dpr;
-      ctx.fillStyle = "#ff2d95";
+      ctx.fillStyle = 'rgba(225, 115, 150, 0.92)';
       ctx.beginPath();
       var ds = tile * 0.22;
       ctx.moveTo(cx, cy - ds);
@@ -2188,9 +2467,27 @@
     const { originX, originY, tile } = state.layout;
     const x = originX + target.c * tile;
     const y = originY + target.r * tile;
-    ctx.strokeStyle = "rgba(0,229,255,0.5)";
-    ctx.lineWidth = Math.max(1.5, tile * 0.05);
+    ctx.strokeStyle = 'rgba(160, 150, 170, 0.45)';
+    ctx.lineWidth = Math.max(1.2, tile * 0.04);
     ctx.strokeRect(x + 2, y + 2, tile - 4, tile - 4);
+  }
+
+  // Paper grain overlay — very subtle noise texture, sparse samples so it does not blur edges
+  function drawPaperGrain() {
+    var w = state.layout.width, h = state.layout.height;
+    var imgData = ctx.getImageData(0, 0, w, h);
+    var data = imgData.data;
+    var seed = 7.731;
+    for (var i = 0; i < data.length; i += 40) {
+      var px = (i / 4) % w;
+      var py = Math.floor((i / 4) / w);
+      var n = Math.sin(px * 0.13 + py * 0.07 + seed) * 43758.5453;
+      n = (n - Math.floor(n) - 0.5) * 3;
+      data[i] = Math.min(255, Math.max(0, data[i] + n));
+      data[i+1] = Math.min(255, Math.max(0, data[i+1] + n));
+      data[i+2] = Math.min(255, Math.max(0, data[i+2] + n));
+    }
+    ctx.putImageData(imgData, 0, 0);
   }
 
   function drawEffects(frame) {
@@ -2341,6 +2638,53 @@
     scheduleTick();
   }
 
+  // ---- BGM ----
+  var bgmEls = {
+    intro: document.getElementById('bgmIntro'),
+    maze: document.getElementById('bgmMaze'),
+    boss: document.getElementById('bgmBoss'),
+  };
+  var bgmState = { current: null, fadeTimer: null };
+
+  function bgmPlay(el) {
+    if (!el) return;
+    el.volume = 0.35;
+    el.currentTime = 0;
+    el.play().catch(function(){});
+    bgmState.current = el;
+  }
+
+  function bgmCrossfade(toEl, duration) {
+    duration = duration || 700;
+    if (bgmState.fadeTimer) { clearInterval(bgmState.fadeTimer); bgmState.fadeTimer = null; }
+    if (!toEl || bgmState.current === toEl) return;
+    var from = bgmState.current;
+    var startVol = from ? from.volume : 0.35;
+    toEl.volume = 0;
+    toEl.play().catch(function(){});
+    var steps = 20, stepTime = duration / steps, i = 0;
+    bgmState.fadeTimer = setInterval(function() {
+      i++;
+      var t = i / steps;
+      if (from) from.volume = Math.max(0, startVol * (1 - t));
+      toEl.volume = Math.min(0.35, 0.35 * t);
+      if (i >= steps) {
+        clearInterval(bgmState.fadeTimer);
+        bgmState.fadeTimer = null;
+        if (from) { from.pause(); from.currentTime = 0; }
+        bgmState.current = toEl;
+      }
+    }, stepTime);
+  }
+
+  function bgmStopAll() {
+    if (bgmState.fadeTimer) { clearInterval(bgmState.fadeTimer); bgmState.fadeTimer = null; }
+    [bgmEls.intro, bgmEls.maze, bgmEls.boss].forEach(function(el) {
+      if (el) { el.pause(); el.currentTime = 0; }
+    });
+    bgmState.current = null;
+  }
+
   function stopPlayback() {
     state.playing = false;
     if (state.timer) window.clearTimeout(state.timer);
@@ -2417,8 +2761,11 @@
   function reset() {
     stopPlayback();
     closeBossOverlay(false);
+    exitBattleMode();
+    hideBattlePrompt();
     resetBossBattleReplayState();
     setFrame(0);
+    showActors();
   }
 
   function buildBossBattlePayload(frame) {
@@ -2514,6 +2861,7 @@
     state.bossBattlePendingFrame = state.frameIndex;
     state.bossAutoResume = true;
     stopPlayback();
+    bgmStopAll(); // iframe has its own BGM
     document.body.classList.add("overlay-open");
     els.bossOverlay.hidden = false;
     els.bossOverlay.setAttribute("aria-hidden", "false");
@@ -2540,6 +2888,7 @@
     scheduleTrapHide(currentFrame());
     playPendingBossOutcomeEffect();
     state.bossAutoResume = false;
+    bgmCrossfade(bgmEls.maze); // resume maze BGM after overlay closes
     if (shouldResume) startPlayback();
   }
 
@@ -2548,7 +2897,8 @@
     if (!frame?.bossEncounter || state.bossBattleActive || state.bossAlertTimer) return;
     if (state.bossBattleQueue.includes(state.frameIndex)) return;
     state.bossBattleQueue.push(state.frameIndex);
-    queueBossOverlay(frame);
+    stopPlayback();
+    showBattlePrompt();
   }
 
   function handleBossOverlayMessage(event) {
@@ -2598,12 +2948,14 @@
     els.startGameBtn.disabled = true;
     resetBossBattleReplayState();
     setFrame(0);
+    bgmCrossfade(bgmEls.maze);
     document.body.classList.add("intro-leaving");
     window.setTimeout(function () {
       document.body.classList.remove("intro-active", "intro-leaving");
       els.canvas.offsetHeight; // force reflow
       fitCanvas();
       draw();
+      showActors();
       startPlayback();
     }, 600);
   }
@@ -2637,6 +2989,17 @@
     els.closeBossOverlayBtn.addEventListener("click", () => {
       closeBossOverlay(false);
     });
+    if (els.enterBattleBtn) {
+      els.enterBattleBtn.addEventListener("click", () => {
+        enterBattleMode();
+      });
+    }
+    if (els.battleDataBtn) {
+      els.battleDataBtn.addEventListener("click", toggleBattleDataPanel);
+    }
+    if (els.closeBattleDataBtn) {
+      els.closeBattleDataBtn.addEventListener("click", toggleBattleDataPanel);
+    }
 
     els.timeline.addEventListener("input", (event) => {
       stopPlayback();
@@ -2690,14 +3053,34 @@
       });
     }
 
-    // Compare view-switch buttons (event delegation on compareResults panel)
+    // Compare overlay: close controls + view-switch buttons (event delegation)
+    var compareOverlay = document.getElementById("compareOverlay");
     var comparePanel = document.getElementById("compareResults");
+    function closeCompareOverlay() {
+      if (compareOverlay) {
+        compareOverlay.hidden = true;
+        compareOverlay.classList.remove("is-visible");
+      }
+    }
+    if (compareOverlay) {
+      compareOverlay.addEventListener("click", function (e) {
+        if (e.target === compareOverlay || e.target.classList.contains("compare-overlay-backdrop")) {
+          closeCompareOverlay();
+        }
+      });
+      var closeCompareBtn = document.getElementById("closeCompareOverlayBtn");
+      if (closeCompareBtn) closeCompareBtn.addEventListener("click", closeCompareOverlay);
+    }
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && compareOverlay && !compareOverlay.hidden) closeCompareOverlay();
+    });
     if (comparePanel) {
       comparePanel.addEventListener("click", function (e) {
         var btn = e.target.closest("[data-compare-view]");
         if (!btn) return;
         var mode = btn.getAttribute("data-compare-view");
         window._viewAlgo(mode);
+        closeCompareOverlay();
       });
     }
     els.fileInput.addEventListener("change", async (event) => {
@@ -2749,4 +3132,13 @@
   initSidebars();
   initEmptyState();
   ensureBossFrameLoaded();
+
+  // Start intro BGM on first user interaction (browser autoplay policy)
+  document.addEventListener('click', function bgmInitClick() {
+    document.removeEventListener('click', bgmInitClick);
+    if (!bgmState.current) bgmPlay(bgmEls.intro);
+  }, { once: true });
+
+  // Expose for testing / debugging
+  window._battleTest = { enterBattleMode, exitBattleMode, showBattlePrompt };
 })();

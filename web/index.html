@@ -105,20 +105,51 @@
       <div class="panel glass tool-section compare-section">
         <div class="section-title">Compare</div>
         <button id="runCompareBtn" type="button" class="primary-btn" style="width:100%;margin-bottom:6px;">Run</button>
-        <div id="compareResults" class="compare-results" hidden></div>
         <p class="meta-text" style="font-size:8px;">Local Greedy vs Global Greedy</p>
       </div>
       </div>
     </div>
   </div>
 
-  <!-- CENTER: MAZE CANVAS -->
+  <!-- CENTER: MAZE + BATTLE ARENA -->
   <section class="stage-area">
-    <canvas id="mazeCanvas" width="960" height="960" aria-label="Maze canvas"></canvas>
-    <div id="emptyMapPrompt" class="empty-map-prompt">
-      <p>Click MAPS in the top-right to load a map</p>
-      <button id="emptyImportBtn" type="button" class="empty-import-btn">Import JSON Map</button>
+    <!-- LEFT ACTOR: Drifter -->
+    <aside class="actor-panel actor-player" id="actorPlayer">
+      <img src="./assets/leaper_idle.png" class="actor-svg actor-leaper" alt="Drifter" draggable="false">
+      <div class="actor-label">
+        <span class="actor-name">DRIFTER</span>
+        <span id="playerHp" class="actor-hp">Coins: --</span>
+      </div>
+    </aside>
+
+    <!-- CANVAS STACK -->
+    <div class="canvas-stack" id="canvasStack">
+      <canvas id="mazeCanvas" width="960" height="960" aria-label="Maze canvas"></canvas>
+      <div id="emptyMapPrompt" class="empty-map-prompt">
+        <p>Click MAPS in the top-right to load a map</p>
+        <button id="emptyImportBtn" type="button" class="empty-import-btn">Import JSON Map</button>
+      </div>
+      <div class="battle-prompt hidden" id="battlePrompt">
+        <p>Boss Encountered!</p>
+        <button id="enterBattleBtn" type="button" class="primary-btn">Enter Battle</button>
+      </div>
     </div>
+
+    <!-- Battle effects overlay (slash, damage, particles between the two actors) -->
+    <div class="battle-effects" id="battleEffects" aria-hidden="true">
+      <div class="slash-beam" id="slashBeam"></div>
+      <div class="damage-pop" id="damagePop">-DMG</div>
+      <div class="particle-burst" id="particleBurst"></div>
+    </div>
+
+    <!-- RIGHT ACTOR: Boss -->
+    <aside class="actor-panel actor-boss" id="actorBoss">
+      <img src="./assets/boss_awaken.png" class="actor-svg actor-boss-anim" alt="Judgement" draggable="false">
+      <div class="actor-label">
+        <span class="actor-name">JUDGEMENT</span>
+        <span id="bossHp" class="actor-hp">HP: --</span>
+      </div>
+    </aside>
   </section>
 
   <!-- RIGHT SIDEBAR -->
@@ -168,6 +199,58 @@
 
 </main>
 
+<!-- Battle data toggle button (body-level, only visible in melee-mode) -->
+<button id="battleDataBtn" type="button" class="battle-data-toggle" aria-label="Toggle battle data panel" hidden>
+  <span>DATA</span>
+</button>
+
+<!-- Battle data panel (body-level, slide-in from right) -->
+<aside id="battleDataPanel" class="battle-data-panel hidden">
+  <div class="battle-data-header">
+    <span class="battle-data-title">Combat Data</span>
+    <button id="closeBattleDataBtn" type="button" class="close-btn" aria-label="Close">×</button>
+  </div>
+  <div class="battle-data-body">
+    <section class="data-section">
+      <h3>Metrics</h3>
+      <div class="data-grid">
+        <div><span>Hit</span><strong id="bdHit">0 / 5</strong></div>
+        <div><span>Phase</span><strong id="bdPhase">Idle</strong></div>
+        <div><span>Round</span><strong id="bdRound">0</strong></div>
+        <div><span>Coins</span><strong id="bdCoins">0</strong></div>
+      </div>
+    </section>
+    <section class="data-section">
+      <h3>Current Action</h3>
+      <dl class="detail-list">
+        <div><dt>Player</dt><dd id="bdPlayerAction">Idle</dd></div>
+        <div><dt>Boss</dt><dd id="bdBossAction">Idle</dd></div>
+        <div><dt>Effect</dt><dd id="bdEffect">None</dd></div>
+        <div><dt>Screen</dt><dd id="bdScreen">Stable</dd></div>
+      </dl>
+    </section>
+    <section class="data-section grow">
+      <h3>Event Log</h3>
+      <ol id="bdEventList" class="event-list"></ol>
+    </section>
+  </div>
+</aside>
+
+<!-- ===== ALGORITHM COMPARE OVERLAY ===== -->
+<div id="compareOverlay" class="compare-overlay" hidden aria-hidden="true">
+  <div class="compare-overlay-backdrop"></div>
+  <section class="compare-overlay-shell">
+    <div class="compare-overlay-topbar">
+      <div>
+        <p class="eyebrow">Algorithm Arena</p>
+        <h2>Algorithm Comparison</h2>
+      </div>
+      <button id="closeCompareOverlayBtn" type="button" class="icon-btn" aria-label="关闭">✕</button>
+    </div>
+    <div id="compareResults" class="compare-results"></div>
+  </section>
+</div>
+
 <!-- ===== BOSS ALERTS ===== -->
 <div id="bossAlert" class="boss-alert" hidden aria-hidden="true">
   <div class="boss-alert-line" aria-hidden="true"></div>
@@ -200,6 +283,10 @@
   </section>
 </div>
 
+<audio id="bgmIntro" src="./assets/bgm/intro.m4a" loop preload="auto" hidden></audio>
+<audio id="bgmMaze" src="./assets/bgm/maze.m4a" loop preload="auto" hidden></audio>
+<audio id="bgmBoss" src="./assets/bgm/boss.m4a" loop preload="auto" hidden></audio>
+
 <script>
 (()=>{
   var c=document.getElementById('particles');
@@ -219,6 +306,6 @@
   }
 })();
 </script>
-<script src="./app.js" defer></script>
+<script src="./app.js" charset="utf-8" defer></script>
 </body>
 </html>
