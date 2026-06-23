@@ -1,9 +1,6 @@
 (() => {
-  const DEFAULT_MAP_CANDIDATES = [
-    "../map地图/maze_15_15.json",
-    "../map/maze_15_15.json",
-    "../maze_15_15.json",
-  ];
+  const MAP_DIR = "../map/";
+  const MAP_FILE_LIST = ["maze_15_15.json","maze.json","1.json","2.json","3.json","4.json"];
   const ACTIVE_MAP_CACHE_KEY = "ai_maze_active_map";
   const DEFAULT_MAP_DATA = {
     maze: [
@@ -62,63 +59,63 @@
 
   const TILE = {
     "#": {
-      label: "墙体",
-      color: "#2a2f37",
-      stroke: "#15191f",
-      weight: "不可通行",
+      label: "Wall",
+      color: "#14101f",
+      stroke: "#0a0815",
+      weight: "Impassable",
       asset: "../viz/assets/wall.png",
     },
     " ": {
-      label: "通路",
-      color: "#edf2f7",
-      stroke: "#cbd5e1",
+      label: "Path",
+      color: "#0c0b18",
+      stroke: "#1a1630",
       weight: "1",
       asset: "../viz/assets/floor.png",
     },
     S: {
-      label: "起点",
-      color: "#2f9e44",
-      stroke: "#1d6f31",
+      label: "Start",
+      color: "#00e5ff",
+      stroke: "#005a6e",
       weight: "1",
       asset: "../viz/assets/floor.png",
     },
     E: {
-      label: "出口",
-      color: "#6d5dfc",
-      stroke: "#3f35b3",
-      weight: "目标",
+      label: "Exit",
+      color: "#ffaa00",
+      stroke: "#6e4a00",
+      weight: "Goal",
       asset: "../viz/assets/exit.png",
     },
     B: {
       label: "Boss",
-      color: "#e4572e",
-      stroke: "#a7341b",
-      weight: "战斗",
+      color: "#ff3355",
+      stroke: "#801020",
+      weight: "Combat",
       asset: "../viz/assets/boss.png",
     },
     T: {
-      label: "陷阱",
-      color: "#f2a541",
-      stroke: "#a85f00",
+      label: "Trap",
+      color: "#ff7700",
+      stroke: "#803800",
       weight: `+${TRAP_DAMAGE}`,
       asset: "../viz/assets/trap.png",
     },
     C: {
-      label: "金币",
-      color: "#f7d046",
-      stroke: "#a87700",
+      label: "Coin",
+      color: "#ffaa00",
+      stroke: "#6e4a00",
       weight: `+${COIN_VALUE}`,
       asset: "../viz/assets/coin.png",
     },
     G: {
-      label: "金币",
-      color: "#f7d046",
-      stroke: "#a87700",
+      label: "Coin",
+      color: "#ffaa00",
+      stroke: "#6e4a00",
       weight: `+${COIN_VALUE}`,
       asset: "../viz/assets/coin.png",
     },
     L: {
-      label: "机关",
+      label: "Mech",
       color: "#9b5de5",
       stroke: "#6730a8",
       weight: "1",
@@ -148,7 +145,6 @@
     emptyImportBtn: document.getElementById("emptyImportBtn"),
     introScreen: document.getElementById("introScreen"),
     startGameBtn: document.getElementById("startGameBtn"),
-    introImportBtn: document.getElementById("introImportBtn"),
     introSize: document.getElementById("introSize"),
     introRoute: document.getElementById("introRoute"),
     introBoss: document.getElementById("introBoss"),
@@ -176,6 +172,15 @@
     toggleHeat: document.getElementById("toggleHeat"),
     toggleSprites: document.getElementById("toggleSprites"),
     mapMeta: document.getElementById("mapMeta"),
+    actorPlayer: document.getElementById("actorPlayer"),
+    actorBoss: document.getElementById("actorBoss"),
+    canvasStack: document.getElementById("canvasStack"),
+    battleEffects: document.getElementById("battleEffects"),
+    slashBeam: document.getElementById("slashBeam"),
+    damagePop: document.getElementById("damagePop"),
+    particleBurst: document.getElementById("particleBurst"),
+    battlePrompt: document.getElementById("battlePrompt"),
+    enterBattleBtn: document.getElementById("enterBattleBtn"),
     tileCoord: document.getElementById("tileCoord"),
     tileType: document.getElementById("tileType"),
     tileWeight: document.getElementById("tileWeight"),
@@ -190,6 +195,18 @@
     bossOverlayTitle: document.getElementById("bossOverlayTitle"),
     bossOverlayFrame: document.getElementById("bossOverlayFrame"),
     closeBossOverlayBtn: document.getElementById("closeBossOverlayBtn"),
+    battleDataBtn: document.getElementById("battleDataBtn"),
+    battleDataPanel: document.getElementById("battleDataPanel"),
+    closeBattleDataBtn: document.getElementById("closeBattleDataBtn"),
+    bdHit: document.getElementById("bdHit"),
+    bdPhase: document.getElementById("bdPhase"),
+    bdRound: document.getElementById("bdRound"),
+    bdCoins: document.getElementById("bdCoins"),
+    bdPlayerAction: document.getElementById("bdPlayerAction"),
+    bdBossAction: document.getElementById("bdBossAction"),
+    bdEffect: document.getElementById("bdEffect"),
+    bdScreen: document.getElementById("bdScreen"),
+    bdEventList: document.getElementById("bdEventList"),
   };
 
   const ctx = els.canvas.getContext("2d");
@@ -232,6 +249,10 @@
     compareResult: null,
     _originalFrames: null,
     _originalRoute: null,
+    battleDataOpen: false,
+    battleHitCount: 0,
+    battleTotalHits: 5,
+    battleEventLog: [],
     layout: {
       dpr: 1,
       width: 0,
@@ -275,6 +296,197 @@
     }
     state.lastEffectFrameIndex = null;
     state.pendingBossOutcome = null;
+  }
+
+  // ---- Actor panel & battle transition ----
+  function showActors() {
+    if (els.actorPlayer) els.actorPlayer.classList.add("visible");
+    if (els.actorBoss) els.actorBoss.classList.add("visible");
+  }
+  function hideActors() {
+    if (els.actorPlayer) els.actorPlayer.classList.remove("visible");
+    if (els.actorBoss) els.actorBoss.classList.remove("visible");
+  }
+  function showBattlePrompt() {
+    if (els.battlePrompt) els.battlePrompt.classList.remove("hidden");
+  }
+  function hideBattlePrompt() {
+    if (els.battlePrompt) els.battlePrompt.classList.add("hidden");
+  }
+  // ---- Real Boss Battle Animation (SVG actors + CSS) ----
+  function clearBattleClasses() {
+    if (els.actorPlayer) {
+      els.actorPlayer.classList.remove("battle-charge", "battle-dash", "battle-attack", "battle-recover", "melee-counter-hit");
+    }
+    if (els.actorBoss) {
+      els.actorBoss.classList.remove("battle-hit", "battle-defeated", "battle-dash");
+    }
+    if (els.slashBeam) els.slashBeam.classList.remove("animate");
+    if (els.damagePop) els.damagePop.classList.remove("animate");
+    if (els.particleBurst) els.particleBurst.classList.remove("animate");
+    if (els.battleEffects) els.battleEffects.classList.remove("active");
+    document.body.classList.remove("screen-shake");
+    document.body.classList.remove("melee-mode");
+  }
+
+  function resetHitClasses() {
+    if (els.actorPlayer) {
+      els.actorPlayer.classList.remove("battle-charge", "battle-dash", "battle-attack", "battle-recover", "melee-counter-hit");
+    }
+    if (els.actorBoss) {
+      els.actorBoss.classList.remove("battle-hit", "battle-defeated", "battle-dash");
+    }
+    if (els.slashBeam) els.slashBeam.classList.remove("animate");
+    if (els.damagePop) els.damagePop.classList.remove("animate");
+    if (els.particleBurst) els.particleBurst.classList.remove("animate");
+    document.body.classList.remove("screen-shake");
+  }
+
+  function startSvgBattleSequence() {
+    const player = els.actorPlayer;
+    const boss = els.actorBoss;
+    if (!player || !boss) return;
+
+    resetHitClasses();
+    if (els.battleEffects) els.battleEffects.classList.add("active");
+
+    const hits = 5;
+    const cycleMs = 5000;
+    let hit = 0;
+
+    function doOneHit() {
+      if (hit >= hits) {
+        // Final recovery
+        updateBattleData("Recovery", "Recovering", "Defeated", "None", "Stable");
+        setTimeout(function() {
+          resetHitClasses();
+          player.classList.add("battle-recover");
+          setTimeout(function() {
+            clearBattleClasses();
+            exitBattleMode();
+            startPlayback();
+          }, 2500);
+        }, 1000);
+        return;
+      }
+
+      state.battleHitCount = hit + 1;
+      resetHitClasses();
+      player.classList.add("battle-charge");
+      updateBattleData("Charge", "Charging sword", "Bracing", "Sword glow", "Stable");
+
+      // 2s charge → dash
+      setTimeout(function() {
+        player.classList.remove("battle-charge");
+        player.classList.add("battle-dash");
+        updateBattleData("Dash", "Lunging forward", "Bracing", "Dash", "Stable");
+      }, 2000);
+
+      // 3.2s dash → attack + slash beam + screen shake
+      setTimeout(function() {
+        player.classList.remove("battle-dash");
+        player.classList.add("battle-attack");
+        if (els.slashBeam) { els.slashBeam.classList.remove("animate"); void els.slashBeam.offsetWidth; els.slashBeam.classList.add("animate"); }
+        document.body.classList.add("screen-shake");
+        setTimeout(function() { document.body.classList.remove("screen-shake"); }, 600);
+        updateBattleData("Attack", "Slashing", "Hit", "Slash beam", "Shaking");
+      }, 3200);
+
+      // 3.8s boss hit + damage pop + particles
+      setTimeout(function() {
+        boss.classList.add("battle-hit");
+        if (els.damagePop) { els.damagePop.classList.remove("animate"); void els.damagePop.offsetWidth; els.damagePop.classList.add("animate"); }
+        if (els.particleBurst) { els.particleBurst.classList.remove("animate"); void els.particleBurst.offsetWidth; els.particleBurst.classList.add("animate"); }
+        updateBattleData("Impact", "Slash connected", "Staggering", "DMG + Particles", "Shaking");
+      }, 3800);
+
+      // Boss counter (40% on hit 3+)
+      if (hit >= 2 && Math.random() < 0.4) {
+        setTimeout(function() {
+          resetHitClasses();
+          boss.classList.add("battle-dash");
+          updateBattleData("Counter Windup", "Vulnerable", "Counter-attacking", "Boss lunge", "Stable");
+          setTimeout(function() {
+            player.classList.add("melee-counter-hit");
+            document.body.classList.add("screen-shake");
+            setTimeout(function() { document.body.classList.remove("screen-shake"); }, 600);
+            updateBattleData("Counter Hit!", "Knocked back", "Counter strike", "Knockback", "Shaking");
+            setTimeout(function() {
+              resetHitClasses();
+              hit++;
+              doOneHit();
+            }, 1600);
+          }, 800);
+        }, 4300);
+      } else {
+        setTimeout(function() {
+          boss.classList.remove("battle-hit");
+          player.classList.remove("battle-attack");
+          hit++;
+          doOneHit();
+        }, cycleMs);
+      }
+    }
+
+    doOneHit();
+  }
+
+  function updateBattleData(phase, playerAction, bossAction, effect, screen) {
+    if (!els.bdHit) return;
+    els.bdHit.textContent = state.battleHitCount + " / " + state.battleTotalHits;
+    els.bdPhase.textContent = phase || "Idle";
+    var frame = state.frames[state.frameIndex];
+    els.bdRound.textContent = frame ? String(frame.round || 0) : "0";
+    els.bdCoins.textContent = frame ? String(frame.coins || 0) : "0";
+    els.bdPlayerAction.textContent = playerAction || "Idle";
+    els.bdBossAction.textContent = bossAction || "Idle";
+    els.bdEffect.textContent = effect || "None";
+    els.bdScreen.textContent = screen || "Stable";
+
+    if (phase && phase !== "Idle") {
+      var msg = "[" + state.battleHitCount + "] " + (playerAction || phase);
+      if (bossAction && bossAction !== "Idle") msg += " / Boss: " + bossAction;
+      if (effect && effect !== "None") msg += " / " + effect;
+      state.battleEventLog.unshift(msg);
+      if (state.battleEventLog.length > 30) state.battleEventLog.pop();
+      renderBattleEvents();
+    }
+  }
+
+  function renderBattleEvents() {
+    if (!els.bdEventList) return;
+    els.bdEventList.innerHTML = "";
+    state.battleEventLog.forEach(function(msg, i) {
+      var li = document.createElement("li");
+      li.innerHTML = '<span class="event-round" style="color:var(--cyan);font-weight:700;min-width:24px;">' + (i + 1) + "</span><span style='color:var(--text-dim);'>" + msg + "</span>";
+      els.bdEventList.appendChild(li);
+    });
+  }
+
+  function toggleBattleDataPanel() {
+    state.battleDataOpen = !state.battleDataOpen;
+    if (els.battleDataPanel) els.battleDataPanel.classList.toggle("hidden", !state.battleDataOpen);
+  }
+
+  function enterBattleMode() {
+    hideBattlePrompt();
+    if (els.canvasStack) els.canvasStack.classList.add("hidden");
+    document.body.classList.add("melee-mode");
+    state.battleHitCount = 0;
+    state.battleEventLog = [];
+    if (els.battleDataBtn) els.battleDataBtn.hidden = false;
+    bgmCrossfade(bgmEls.boss);
+    startSvgBattleSequence();
+  }
+
+  function exitBattleMode() {
+    clearBattleClasses();
+    if (els.canvasStack) els.canvasStack.classList.remove("hidden");
+    if (els.battleDataBtn) els.battleDataBtn.hidden = true;
+    if (els.battleDataPanel) els.battleDataPanel.classList.add("hidden");
+    state.battleDataOpen = false;
+    bgmCrossfade(bgmEls.maze);
+    draw();
   }
 
   function clearBossAlert() {
@@ -429,13 +641,13 @@
     let current = start;
     let coins = findCells(grid, ["C", "G"]);
 
-    notes.set(keyOf(start), "从入口开始探索");
+    notes.set(keyOf(start), "Starting exploration from entrance");
 
     while (current && coins.length) {
       const pick = bestNextTarget(grid, current, coins);
       if (!pick) break;
       appendPath(route, pick.path);
-      notes.set(keyOf(pick.target), "规划收集金币");
+      notes.set(keyOf(pick.target), "Plan to collect coin");
       grid[pick.target.r][pick.target.c] = " ";
       current = pick.target;
       coins = coins.filter((coin) => coin.r !== pick.target.r || coin.c !== pick.target.c);
@@ -446,7 +658,7 @@
       const pick = bestNextTarget(grid, current, bosses);
       if (!pick) break;
       appendPath(route, pick.path);
-      notes.set(keyOf(pick.target), "进入 Boss 战斗");
+      notes.set(keyOf(pick.target), "Entering Boss combat");
       grid[pick.target.r][pick.target.c] = " ";
       current = pick.target;
       bosses = bosses.filter((boss) => boss.r !== pick.target.r || boss.c !== pick.target.c);
@@ -456,7 +668,7 @@
       const exitPath = findPath(grid, current, exit, { avoidTraps: false, avoidBoss: false });
       if (exitPath) {
         appendPath(route, exitPath);
-        notes.set(keyOf(exit), "抵达出口");
+        notes.set(keyOf(exit), "Reached exit");
       }
     }
 
@@ -496,7 +708,7 @@
     route.forEach((pos, index) => {
       const sourceCell = grid[pos.r][pos.c];
       const currentCell = mutable[pos.r][pos.c];
-      let phase = "探索中";
+      let phase = "Exploring";
       let event = notes.get(keyOf(pos)) || "";
 
       revealAround(revealed, grid, pos);
@@ -505,22 +717,22 @@
       if (index > 0 && (currentCell === "C" || currentCell === "G")) {
         coins += COIN_VALUE;
         mutable[pos.r][pos.c] = " ";
-        event = `拾取金币，金币 +${COIN_VALUE}`;
-        phase = "资源收集";
+        event = `Collected coin, coins +${COIN_VALUE}`;
+        phase = "Resource Collect";
       } else if (index > 0 && currentCell === "T" && !triggered.has(keyOf(pos))) {
         coins -= TRAP_DAMAGE;
         triggered.add(keyOf(pos));
         mutable[pos.r][pos.c] = " ";
-        event = `触发陷阱，金币 -${TRAP_DAMAGE}`;
-        phase = "风险处理";
+        event = `Trap triggered, coins -${TRAP_DAMAGE}`;
+        phase = "Risk Handling";
       } else if (index > 0 && currentCell === "B") {
         bossCount += 1;
         mutable[pos.r][pos.c] = " ";
-        event = "Boss 已击败，通路打开";
-        phase = "Boss 战斗";
+        event = "Boss defeated, path opened";
+        phase = "Boss Combat";
       } else if (sourceCell === "E") {
-        phase = "已完成";
-        event = "抵达出口";
+        phase = "Complete";
+        event = "Reached exit";
       }
 
       frames.push({
@@ -853,7 +1065,7 @@
     for (var step = 0; step < COMPARE_MAX_STEPS; step++) {
       var currentCell = groundTruth[pos.r][pos.c];
       var event = "";
-      var phase = "探索中";
+      var phase = "Exploring";
       var bossEncounter = null;
 
       // Record frame (fog state BEFORE scoring this step)
@@ -873,15 +1085,15 @@
           coins += COIN_VALUE;
           groundTruth[pos.r][pos.c] = " ";
           fogMap[pos.r][pos.c] = " ";
-          event = "拾取金币，金币 +" + COIN_VALUE;
-          phase = "资源收集";
+          event = "Collected coin, coins +" + COIN_VALUE;
+          phase = "Resource Collect";
         } else if (currentCell === "T" && !triggeredTraps.has(keyOf(pos))) {
           coins -= TRAP_DAMAGE;
           triggeredTraps.add(keyOf(pos));
           groundTruth[pos.r][pos.c] = " ";
           fogMap[pos.r][pos.c] = " ";
-          event = "触发陷阱，金币 -" + TRAP_DAMAGE;
-          phase = "风险处理";
+          event = "Trap triggered, coins -" + TRAP_DAMAGE;
+          phase = "Risk Handling";
         } else if (currentCell === "B" && bossHpList.length > 0) {
           var bossHp = bossHpList.shift();
           var battleResult = runBossBattle(
@@ -895,23 +1107,23 @@
           if (battleResult.won) {
             bossDefeated += 1;
             bossEncounter = { bossIndex: bossDefeated, bossTotal: (Array.isArray(data.B) ? data.B.length : 0) };
-            event = "Boss " + bossDefeated + " 已击败";
-            phase = "Boss 战斗";
+            event = "Boss " + bossDefeated + " defeated";
+            phase = "Boss Combat";
             if (bossHpList.length === 0) allBossesDefeated = true;
           } else {
-            event = "Boss 战斗失败，金币剩余 " + coins;
-            phase = "Boss 战斗";
+            event = "Boss combat failed, coins remaining " + coins;
+            phase = "Boss Combat";
           }
           groundTruth[pos.r][pos.c] = " ";
           fogMap[pos.r][pos.c] = " ";
         } else if (currentCell === "E" && allBossesDefeated) {
-          frames[frames.length - 1].event = "抵达出口";
-          frames[frames.length - 1].phase = "已完成";
+          frames[frames.length - 1].event = "Reached exit";
+          frames[frames.length - 1].phase = "Complete";
           break;
         }
         // Update the frame we just recorded with the event/phase from cell handling
         if (event) frames[frames.length - 1].event = event;
-        if (phase !== "探索中") frames[frames.length - 1].phase = phase;
+        if (phase !== "Exploring") frames[frames.length - 1].phase = phase;
         if (bossEncounter) frames[frames.length - 1].bossEncounter = bossEncounter;
         // Also update coins and bossCount on the frame after cell handling
         frames[frames.length - 1].coins = coins;
@@ -1203,7 +1415,7 @@
       // ── Step B: Handle current cell (coin / trap / boss / exit) ─
       var currentCell = groundTruth[pos.r][pos.c];
       var event = "";
-      var phase = "探索中";
+      var phase = "Exploring";
       var bossEncounter = null;
 
       if (step > 0) {
@@ -1211,15 +1423,15 @@
           coins += COIN_VALUE;
           groundTruth[pos.r][pos.c] = " ";
           fogMap[pos.r][pos.c] = " ";
-          event = "拾取金币，金币 +" + COIN_VALUE;
-          phase = "资源收集";
+          event = "Collected coin, coins +" + COIN_VALUE;
+          phase = "Resource Collect";
         } else if (currentCell === "T" && !triggeredTraps.has(keyOf(pos))) {
           coins -= TRAP_DAMAGE;
           triggeredTraps.add(keyOf(pos));
           groundTruth[pos.r][pos.c] = " ";
           fogMap[pos.r][pos.c] = " ";
-          event = "触发陷阱，金币 -" + TRAP_DAMAGE;
-          phase = "风险处理";
+          event = "Trap triggered, coins -" + TRAP_DAMAGE;
+          phase = "Risk Handling";
         } else if (currentCell === "B" && bossHpList.length > 0) {
           var bossHp = bossHpList.shift();
           var battleResult = runBossBattle(
@@ -1233,12 +1445,12 @@
           if (battleResult.won) {
             bossDefeated += 1;
             bossEncounter = { bossIndex: bossDefeated, bossTotal: (Array.isArray(data.B) ? data.B.length : 0) };
-            event = "Boss " + bossDefeated + " 已击败";
-            phase = "Boss 战斗";
+            event = "Boss " + bossDefeated + " defeated";
+            phase = "Boss Combat";
             if (bossHpList.length === 0) allBossesDefeated = true;
           } else {
-            event = "Boss 战斗失败，金币剩余 " + coins;
-            phase = "Boss 战斗";
+            event = "Boss combat failed, coins remaining " + coins;
+            phase = "Boss Combat";
           }
           groundTruth[pos.r][pos.c] = " ";
           fogMap[pos.r][pos.c] = " ";
@@ -1247,7 +1459,7 @@
           var revealedSetE = getRevealedSet(fogMap);
           frames.push({
             round: step, pos: { r: pos.r, c: pos.c }, coins: coins,
-            bossCount: bossDefeated, phase: "已完成", event: "抵达出口",
+            bossCount: bossDefeated, phase: "Complete", event: "Reached exit",
             sourceCell: "E", bossEncounter: null,
             grid: cloneGrid(groundTruth), revealed: new Set(revealedSetE),
             heat: [], exploredRatio: revealedSetE.size / (rows * cols),
@@ -1269,7 +1481,7 @@
 
       // Update frame with cell-handling results (coins/phase/grid may have changed)
       if (event) frames[frames.length - 1].event = event;
-      if (phase !== "探索中") frames[frames.length - 1].phase = phase;
+      if (phase !== "Exploring") frames[frames.length - 1].phase = phase;
       if (bossEncounter) frames[frames.length - 1].bossEncounter = bossEncounter;
       frames[frames.length - 1].coins = coins;
       frames[frames.length - 1].bossCount = bossDefeated;
@@ -1396,7 +1608,7 @@
 
   function runComparison() {
     if (!state.data) {
-      alert("请先导入或加载地图");
+      alert("Please import or load a map first");
       return;
     }
 
@@ -1436,35 +1648,55 @@
     var winnerB = cr.winner === "B";
 
     panel.innerHTML =
-      '<div class="compare-header">算法对比结果</div>' +
+      '<div class="compare-header">' +
+        '<span class="compare-header-kicker">ALGORITHM ARENA</span>' +
+        '<span class="compare-header-title">Algorithm Comparison</span>' +
+        '<span class="compare-header-sub">Local Greedy <span class="diamond-sep">◆</span> Global Greedy</span>' +
+      '</div>' +
       '<div class="compare-cards">' +
-        buildCompareCard("算法 A · 纯 3×3 局部贪心", a, cr.timeA, winnerA, "仅看当前 3×3 窗口, O(1)/步") +
-        buildCompareCard("算法 B · 记忆增强全局贪心", b, cr.timeB, winnerB, "基于所有已揭露格子 Dijkstra, O(R log R)/步") +
+        buildCompareCard("A", "Algorithm A · Pure 3x3 Local Greedy", a, cr.timeA, winnerA, "Only sees 3x3 window, O(1)/step") +
+        '<div class="compare-vs"><span>VS</span><i class="compare-vs-diamond"></i></div>' +
+        buildCompareCard("B", "Algorithm B · Memory-Enhanced Global Greedy", b, cr.timeB, winnerB, "Dijkstra on all revealed tiles, O(R log R)/step") +
       '</div>' +
       '<div class="compare-actions">' +
-        '<button class="secondary-btn" data-compare-view="A">查看算法 A 路径</button>' +
-        '<button class="secondary-btn" data-compare-view="B">查看算法 B 路径</button>' +
-        '<button class="secondary-btn" data-compare-view="original">查看原始规划</button>' +
+        '<button class="secondary-btn" data-compare-view="A"><span class="compare-action-mark">◆</span>View Algo A Path</button>' +
+        '<button class="secondary-btn" data-compare-view="B"><span class="compare-action-mark">◆</span>View Algo B Path</button>' +
+        '<button class="secondary-btn" data-compare-view="original"><span class="compare-action-mark">◇</span>View Original Plan</button>' +
       '</div>';
 
     panel.hidden = false;
+
+    var overlay = document.getElementById("compareOverlay");
+    if (overlay) {
+      overlay.hidden = false;
+      overlay.classList.remove("is-visible");
+      void overlay.offsetWidth;
+      overlay.classList.add("is-visible");
+    }
   }
 
-  function buildCompareCard(title, result, timeMs, isWinner, desc) {
+  function buildCompareCard(letter, title, result, timeMs, isWinner, desc) {
     var winnerClass = isWinner ? " compare-winner" : "";
-    var winnerBadge = isWinner ? '<span class="compare-badge">🏆 胜出</span>' : "";
+    var letterClass = " compare-card-" + letter.toLowerCase();
+    var winnerBadge = isWinner ? '<span class="compare-badge"><i></i>WINNER</span>' : "";
     var scoreFormatted = result.score.toFixed(2);
 
     return (
-      '<div class="compare-card' + winnerClass + '">' +
-        '<div class="compare-card-title">' + title + winnerBadge + '</div>' +
-        '<div class="compare-card-desc">' + desc + '</div>' +
+      '<div class="compare-card' + winnerClass + letterClass + '">' +
+        '<div class="compare-card-head">' +
+          '<span class="compare-card-letter">' + letter + '</span>' +
+          '<div class="compare-card-titles">' +
+            '<div class="compare-card-title">' + title + '</div>' +
+            '<div class="compare-card-desc">' + desc + '</div>' +
+          '</div>' +
+          winnerBadge +
+        '</div>' +
         '<div class="compare-metrics">' +
           '<div class="compare-metric"><span>总分/总步数</span><strong>' + scoreFormatted + '</strong></div>' +
           '<div class="compare-metric"><span>总步数</span><strong>' + result.totalSteps + '</strong></div>' +
-          '<div class="compare-metric"><span>最终金币</span><strong>' + result.coins + '</strong></div>' +
-          '<div class="compare-metric"><span>击败Boss</span><strong>' + (result.bossDefeated || 0) + '</strong></div>' +
-          '<div class="compare-metric"><span>耗时</span><strong>' + timeMs.toFixed(0) + ' ms</strong></div>' +
+          '<div class="compare-metric"><span>Final Coins</span><strong>' + result.coins + '</strong></div>' +
+          '<div class="compare-metric"><span>Bosses Defeated</span><strong>' + (result.bossDefeated || 0) + '</strong></div>' +
+          '<div class="compare-metric compare-metric-wide"><span>耗时</span><strong>' + timeMs.toFixed(0) + ' ms</strong></div>' +
         '</div>' +
       '</div>'
     );
@@ -1491,7 +1723,7 @@
       }
       state.frames = state._originalFrames;
       state.route = state._originalRoute;
-      label = "原始规划";
+      label = "Original Plan";
     }
 
     if (mode === "A" || mode === "B") {
@@ -1561,6 +1793,7 @@
     updateUi();
     fitCanvas();
     draw();
+    showActors();
   }
 
   function validateMap(data) {
@@ -1572,37 +1805,82 @@
       throw new Error("maze 每一行长度必须一致");
     }
     if (!findCells(data.maze, ["S"]).length || !findCells(data.maze, ["E"]).length) {
-      throw new Error("maze 需要包含起点 S 和出口 E");
+      throw new Error("Maze must contain start S and exit E");
     }
   }
 
   async function loadDefaultMap() {
     if (window.location.protocol === "file:") {
-      initMap(JSON.parse(JSON.stringify(DEFAULT_MAP_DATA)), "内置示例地图");
-      els.mapMeta.textContent += "（本地文件模式）";
+      initMap(JSON.parse(JSON.stringify(DEFAULT_MAP_DATA)), "Built-in example map");
+      els.mapMeta.textContent += " (local file mode)";
       return;
     }
 
-    for (const url of DEFAULT_MAP_CANDIDATES) {
+    for (const file of MAP_FILE_LIST) {
       try {
+        const url = MAP_DIR + file;
         const response = await fetch(url, { cache: "no-store" });
         if (!response.ok) continue;
         const data = await response.json();
-        const mapName = url.split("/").pop() || "maze_15_15.json";
-        initMap(data, mapName);
+        initMap(data, file);
         return;
       } catch (error) {
-        console.warn(`Map candidate failed: ${url}`, error);
+        console.warn("Map candidate failed: " + url, error);
       }
     }
 
-    console.warn("Default map file could not be loaded; using embedded map.");
-    initMap(JSON.parse(JSON.stringify(DEFAULT_MAP_DATA)), "内置示例地图");
-    els.mapMeta.textContent += "（本地文件模式）";
+    console.warn("No map files found; using embedded map.");
+    initMap(JSON.parse(JSON.stringify(DEFAULT_MAP_DATA)), "Built-in example map");
+    els.mapMeta.textContent += " (local file mode)";
+  }
+
+  function populateMapSelector() {
+    var trigger = document.getElementById("mapSelectorTrigger");
+    if (!trigger) return;
+    trigger.addEventListener("click", function () {
+      els.fileInput.click();
+    });
+  }
+
+  function initSidebars() {
+    var leftTab = document.getElementById("sidebarLeftTab");
+    var leftBar = document.getElementById("sidebarLeft");
+    var rightTab = document.getElementById("sidebarRightTab");
+    var rightBar = document.getElementById("sidebarRight");
+
+    if (leftTab && leftBar) {
+      leftTab.addEventListener("click", function (e) {
+        e.stopPropagation();
+        leftBar.classList.toggle("open");
+        if (rightBar) rightBar.classList.remove("open");
+      });
+    }
+    if (rightTab && rightBar) {
+      rightTab.addEventListener("click", function (e) {
+        e.stopPropagation();
+        rightBar.classList.toggle("open");
+        if (leftBar) leftBar.classList.remove("open");
+      });
+    }
+    document.addEventListener("click", function () {
+      if (leftBar) leftBar.classList.remove("open");
+      if (rightBar) rightBar.classList.remove("open");
+    });
+    if (leftBar) {
+      leftBar.addEventListener("click", function (e) { e.stopPropagation(); });
+    }
+    if (rightBar) {
+      rightBar.addEventListener("click", function (e) { e.stopPropagation(); });
+    }
   }
 
   function initEmptyState() {
     stopPlayback();
+    state.animPlayerX = null;
+    state.animPlayerY = null;
+    state.animProgress = null;
+    state.animToFrame = null;
+    state.animRafId = null;
     state.data = null;
     state.grid = [];
     state.frames = [];
@@ -1628,25 +1906,25 @@
     els.introRoute.textContent = "--";
     els.introBoss.textContent = "--";
     els.introMiniMap.innerHTML = "";
-    els.introMeta.textContent = "请先导入地图";
-    els.mapName.textContent = "未导入地图";
-    els.runState.textContent = "等待导入";
+    els.introMeta.textContent = "Select a map to begin";
+    els.mapName.textContent = "No map imported";
+    els.runState.textContent = "Awaiting import";
     els.metricRound.textContent = "0";
     els.metricCoins.textContent = "0";
     els.metricExplored.textContent = "0%";
     els.metricRoute.textContent = "0";
-    els.phaseLabel.textContent = "等待导入地图";
-    els.cellReadout.textContent = "请选择地图文件";
+    els.phaseLabel.textContent = "Awaiting map import";
+    els.cellReadout.textContent = "Select a map file";
     els.timeline.max = "0";
     els.timeline.value = "0";
-    els.mapMeta.textContent = "请选择一张 JSON 地图导入以开始游戏。";
+    els.mapMeta.textContent = "Please select a JSON map to begin.";
     try {
       window.localStorage.removeItem(ACTIVE_MAP_CACHE_KEY);
     } catch (error) {
       console.warn("Failed to clear active map cache.", error);
     }
     updateTileInfo(null);
-    els.cellReadout.textContent = "请选择地图文件";
+    els.cellReadout.textContent = "Select a map file";
     renderEvents();
     fitCanvas();
     draw();
@@ -1741,7 +2019,7 @@
     els.introSize.textContent = `${rows} x ${cols}`;
     els.introRoute.textContent = String(Math.max(0, route.length - 1));
     els.introBoss.textContent = String(bossCells);
-    els.introMeta.textContent = `${name} / 金币 ${coinCells} / 陷阱 ${trapCells} / 技能 ${Array.isArray(data.PlayerSkills) ? data.PlayerSkills.length : 0}`;
+    els.introMeta.textContent = `${name} / Coins ${coinCells} / Traps ${trapCells} / Skills ${Array.isArray(data.PlayerSkills) ? data.PlayerSkills.length : 0}`;
     els.startGameBtn.disabled = false;
     renderIntroMiniMap(data.maze);
   }
@@ -1767,31 +2045,53 @@
     if (cell === "B") return "boss";
     if (cell === "T") return "trap";
     if (cell === "C" || cell === "G") return "coin";
-    return "path";
+    return "";
   }
 
   function fitCanvas() {
-    const rect = els.canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(320, Math.floor(rect.width * dpr));
-    const height = Math.max(320, Math.floor(rect.height * dpr));
-    if (els.canvas.width !== width || els.canvas.height !== height) {
-      els.canvas.width = width;
-      els.canvas.height = height;
+    var dpr = window.devicePixelRatio || 1;
+    // Read actual rendered CSS size of the canvas (works even when parent has opacity:0)
+    var rectW = els.canvas.clientWidth;
+    var rectH = els.canvas.clientHeight;
+
+    // Fallback if clientWidth/Height is 0 (e.g. element not in layout yet)
+    if (!rectW || !rectH) {
+      var topH = 50;
+      var bottomH = 50;
+      var topEl = document.querySelector(".topbar-area");
+      var bottomEl = document.querySelector(".bottombar-area");
+      if (topEl) topH = topEl.getBoundingClientRect().height || 50;
+      if (bottomEl) bottomH = bottomEl.getBoundingClientRect().height || 50;
+      rectW = Math.max(400, window.innerWidth - 20);
+      rectH = Math.max(400, window.innerHeight - topH - bottomH - 10);
     }
+
+    var w = rectW;
+    var h = rectH;
+
+    var targetWidth = Math.floor(w * dpr);
+    var targetHeight = Math.floor(h * dpr);
+    // Only mutate canvas internal size when it actually changes — resetting wipes the context
+    if (els.canvas.width !== targetWidth || els.canvas.height !== targetHeight) {
+      els.canvas.width = targetWidth;
+      els.canvas.height = targetHeight;
+    }
+
     state.layout.dpr = dpr;
-    state.layout.width = width;
-    state.layout.height = height;
+    state.layout.width = els.canvas.width;
+    state.layout.height = els.canvas.height;
 
     if (state.grid.length) {
-      const rows = state.grid.length;
-      const cols = state.grid[0].length;
-      const pad = Math.max(22 * dpr, Math.min(width, height) * 0.04);
-      const tile = Math.floor(Math.min((width - pad * 2) / cols, (height - pad * 2) / rows));
-      state.layout.tile = tile;
-      state.layout.originX = Math.floor((width - tile * cols) / 2);
-      state.layout.originY = Math.floor((height - tile * rows) / 2);
+      var rows = state.grid.length;
+      var cols = state.grid[0].length;
+      var pad = Math.max(8, Math.min(w, h) * 0.02);
+      var tilePx = Math.floor(Math.min((w - pad * 2) / cols, (h - pad * 2) / rows));
+      if (tilePx < 2) tilePx = 2;
+      state.layout.tile = tilePx * dpr;
+      state.layout.originX = Math.floor((w * dpr - state.layout.tile * cols) / 2);
+      state.layout.originY = Math.floor((h * dpr - state.layout.tile * rows) / 2);
     }
+
   }
 
   function currentFrame() {
@@ -1800,54 +2100,73 @@
 
   function shouldReveal(frame, r, c) {
     if (!state.showFog || state.mode === "full") return true;
-    return frame && frame.revealed.has(`${r},${c}`);
+    if (!frame) return false;
+    return frame.revealed.has(`${r},${c}`);
   }
 
   function draw() {
-    fitCanvas();
-    ctx.clearRect(0, 0, state.layout.width, state.layout.height);
+    try {
+      fitCanvas();
+      ctx.clearRect(0, 0, state.layout.width, state.layout.height);
 
-    if (!state.grid.length) {
-      drawEmptyState("请选择一张地图导入以开始游戏");
-      return;
+      if (!state.grid.length) {
+        drawEmptyState("Please import a JSON map to begin");
+        return;
+      }
+
+      var frame = currentFrame();
+      var cellFrame = state.animToFrame || frame;
+      drawBoardBackground();
+      drawCells(cellFrame);
+      if (cellFrame && state.showFog && state.mode !== "full") drawFogEdges(cellFrame);
+      if (state.showPath && state.route.length > 1) drawPath(frame);
+      drawFocus(frame);
+      drawEffects(frame);
+      drawHover();
+      drawPaperGrain();
+    } catch (e) {
+      console.warn("Draw error:", e);
     }
-
-    const frame = currentFrame();
-    drawBoardBackground();
-    drawCells(frame);
-    if (state.showPath && state.route.length > 1) drawPath(frame);
-    drawFocus(frame);
-    drawEffects(frame);
-    drawHover();
   }
 
   function drawEmptyState(message) {
     fitCanvas();
     ctx.clearRect(0, 0, state.layout.width, state.layout.height);
-    ctx.fillStyle = "#16191f";
+    ctx.fillStyle = "rgba(6,5,10,0.85)";
     ctx.fillRect(0, 0, state.layout.width, state.layout.height);
-    ctx.fillStyle = "#f5f7fb";
-    ctx.font = `${18 * state.layout.dpr}px sans-serif`;
+    ctx.fillStyle = "#7a7590";
+    ctx.font = `${14 * state.layout.dpr}px "Courier New", monospace`;
     ctx.textAlign = "center";
     ctx.fillText(message, state.layout.width / 2, state.layout.height / 2);
   }
 
   function drawBoardBackground() {
-    const { originX, originY, tile } = state.layout;
-    const rows = state.grid.length;
-    const cols = state.grid[0].length;
-    ctx.fillStyle = "#171b22";
-    ctx.fillRect(0, 0, state.layout.width, state.layout.height);
-    ctx.fillStyle = "#0f1319";
-    ctx.fillRect(originX - tile * 0.3, originY - tile * 0.3, tile * (cols + 0.6), tile * (rows + 0.6));
+    var rows = state.grid.length;
+    var cols = state.grid[0].length;
+    var tile = state.layout.tile;
+    var ox = state.layout.originX;
+    var oy = state.layout.originY;
+    // Clear to transparent so CSS deep-space background shows through
+    ctx.clearRect(0, 0, state.layout.width, state.layout.height);
+    if (!tile) return;
+    // Warm paper grain dots at every cell center (sumi-e style)
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        var cx = ox + c * tile + tile/2;
+        var cy = oy + r * tile + tile/2;
+        ctx.fillStyle = 'rgba(170, 160, 150, 0.065)';
+        ctx.fillRect(cx - 0.5, cy - 0.5, 1, 1);
+      }
+    }
   }
 
   function drawCells(frame) {
     const rows = state.grid.length;
     const cols = state.grid[0].length;
     const visibleGrid = frame ? frame.grid : state.grid;
-    for (let r = 0; r < rows; r += 1) {
-      for (let c = 0; c < cols; c += 1) {
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
         const revealed = shouldReveal(frame, r, c);
         const trapHidden = state.hiddenTraps.has(`${r},${c}`);
         const cell = revealed ? (trapHidden ? " " : visibleGrid[r][c]) : null;
@@ -1856,104 +2175,224 @@
     }
   }
 
+  // ============================================================
+  // Watercolor / Sumi-e ink-wash helpers (Gris + Okami style)
+  // ============================================================
+  function cellRand(r, c, seed) {
+    var n = Math.sin(r * 12.9898 + c * 78.233 + seed * 43.123) * 43758.5453;
+    return n - Math.floor(n);
+  }
+  function inkWash(x, y, w, h, cx, cy, r0, r1, stops) {
+    var grad = ctx.createRadialGradient(cx, cy, r0, cx, cy, r1);
+    stops.forEach(function(s) { grad.addColorStop(s[0], s[1]); });
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, w, h);
+  }
+
   function drawTile(r, c, cell, frame) {
-    const { originX, originY, tile } = state.layout;
+    const { originX, originY, tile, dpr } = state.layout;
     const x = originX + c * tile;
     const y = originY + r * tile;
 
     if (cell === null) {
-      ctx.fillStyle = "#11161d";
-      ctx.fillRect(x, y, tile, tile);
-      ctx.fillStyle = "rgba(255,255,255,0.05)";
-      ctx.fillRect(x + tile * 0.18, y + tile * 0.18, tile * 0.64, tile * 0.64);
-      drawGridLine(x, y, tile, "rgba(255,255,255,0.05)");
+      // Fog — dark paper with faint grain dot only
+      var fcx = x + tile/2, fcy = y + tile/2;
+      var grain = ctx.createRadialGradient(fcx, fcy, 0, fcx, fcy, tile*0.08);
+      grain.addColorStop(0, 'rgba(180, 170, 160, 0.04)');
+      grain.addColorStop(1, 'rgba(180, 170, 160, 0)');
+      ctx.fillStyle = grain;
+      ctx.fillRect(x + tile*0.35, y + tile*0.35, tile*0.3, tile*0.3);
       return;
     }
 
-    const info = TILE[cell] || TILE[" "];
-    const floorAsset = state.assets.floor;
-    const wallAsset = state.assets.wall;
+    // Organic offset for watercolor bleeding (deterministic per cell)
+    var offX = (cellRand(r, c, 1) - 0.5) * tile * 0.35;
+    var offY = (cellRand(r, c, 2) - 0.5) * tile * 0.35;
+    var bleed = tile * 0.75; // how far color bleeds past cell edge
 
-    if (state.showSprites && cell === "#" && wallAsset && wallAsset.complete) {
-      ctx.drawImage(wallAsset, x, y, tile, tile);
-    } else if (state.showSprites && floorAsset && floorAsset.complete && cell !== "#") {
-      ctx.drawImage(floorAsset, x, y, tile, tile);
+    if (cell === "#") {
+      // Wall — continuous watercolor block with smooth organic color variation
+      // Smooth global gradient across the entire wall mass
+      var rows = state.grid.length, cols = state.grid[0].length;
+      var nx = c / Math.max(1, cols - 1); // 0 ~ 1 left-to-right
+      var ny = r / Math.max(1, rows - 1); // 0 ~ 1 top-to-bottom
+      var br = 60 + nx * 70 + ny * 30;
+      var bg = 55 + nx * 40 + ny * 50;
+      var bb = 95 + nx * 55 + ny * 45;
+      ctx.fillStyle = 'rgba(' + (br|0) + ',' + (bg|0) + ',' + (bb|0) + ',0.95)';
+      ctx.fillRect(x - 0.5, y - 0.5, tile + 1, tile + 1);
+
+
     } else {
-      ctx.fillStyle = cell === "#" ? TILE["#"].color : TILE[" "].color;
+      // Floor — brighter base so corridors are clearly visible against deep-space bg
+      var fcx = x + tile/2 + offX*0.2, fcy = y + tile/2 + offY*0.2;
+      // Solid base wash (noticeably lighter than background)
+      ctx.fillStyle = 'rgba(58, 54, 80, 0.45)';
       ctx.fillRect(x, y, tile, tile);
+      // Soft watercolor center variation
+      inkWash(x, y, tile, tile,
+        fcx, fcy, 0, tile*0.32,
+        [[0, 'rgba(68, 64, 92, 0.22)'],
+         [0.6, 'rgba(60, 56, 84, 0.10)'],
+         [1, 'rgba(52, 48, 76, 0)']]);
+
+      // Grain dot
+      var grain = ctx.createRadialGradient(fcx, fcy, 0, fcx, fcy, tile*0.1);
+      grain.addColorStop(0, 'rgba(185, 175, 165, 0.20)');
+      grain.addColorStop(1, 'rgba(185, 175, 165, 0)');
+      ctx.fillStyle = grain;
+      ctx.fillRect(x + tile*0.3, y + tile*0.3, tile*0.4, tile*0.4);
+
+      const isVisited = state.route.length && state.route.slice(0, state.frameIndex + 1).some(function(p) { return p.r === r && p.c === c; });
+      if (isVisited) {
+        // Visited path — stronger rose tint
+        inkWash(x, y, tile, tile,
+          x + tile/2 + offX*0.3, y + tile/2 + offY*0.3, 0, tile*0.35,
+          [[0, 'rgba(200, 110, 138, 0.28)'],
+           [0.6, 'rgba(175, 95, 120, 0.14)'],
+           [1, 'rgba(150, 80, 105, 0)']]);
+      }
     }
 
-    if (cell === "S") drawBadge(x, y, tile, "S", TILE.S.color);
-    if (cell === "E") drawObject("exit", x, y, tile, info);
-    if (cell === "B") drawObject("boss", x, y, tile, info);
-    if (cell === "T") drawObject("trap", x, y, tile, info);
-    if (cell === "C" || cell === "G") drawObject("coin", x, y, tile, info);
-    if (cell === "L") drawBadge(x, y, tile, "L", TILE.L.color);
-
-    drawModeOverlay(r, c, x, y, tile, frame);
-    drawGridLine(x, y, tile, "rgba(15, 19, 25, 0.22)");
+    drawCellIcon(cell, x, y, tile);
   }
 
-  function drawObject(name, x, y, tile, info) {
-    const image = state.assets[name];
-    if (state.showSprites && image && image.complete) {
-      const inset = tile * 0.12;
-      ctx.drawImage(image, x + inset, y + inset, tile - inset * 2, tile - inset * 2);
-      return;
+  function drawCellIcon(cell, x, y, tile) {
+    var cx = x + tile/2, cy = y + tile/2, dpr = state.layout.dpr;
+    var iconR = tile * 0.2;
+
+    if (cell === "S") {
+      // Start — bright teal ink spot + sumi-e diamond
+      inkWash(x - tile*0.1, y - tile*0.1, tile*1.2, tile*1.2,
+        cx + (cellRand(0,0,5)-0.5)*tile*0.15, cy + (cellRand(0,0,6)-0.5)*tile*0.15,
+        0, tile*0.45,
+        [[0, 'rgba(100, 210, 210, 0.50)'],
+         [0.5, 'rgba(80, 180, 180, 0.26)'],
+         [1, 'rgba(60, 150, 150, 0)']]);
+      ctx.strokeStyle = 'rgba(140, 235, 235, 0.85)';
+      ctx.lineWidth = 1.4 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - iconR);
+      ctx.lineTo(cx + iconR, cy);
+      ctx.lineTo(cx, cy + iconR);
+      ctx.lineTo(cx - iconR, cy);
+      ctx.closePath();
+      ctx.stroke();
+    } else if (cell === "E") {
+      // Exit — bright amber ink spot + square core
+      inkWash(x - tile*0.1, y - tile*0.1, tile*1.2, tile*1.2,
+        cx + (cellRand(0,0,7)-0.5)*tile*0.15, cy + (cellRand(0,0,8)-0.5)*tile*0.15,
+        0, tile*0.45,
+        [[0, 'rgba(220, 175, 105, 0.45)'],
+         [0.5, 'rgba(190, 150, 85, 0.24)'],
+         [1, 'rgba(160, 125, 65, 0)']]);
+      var es = tile * 0.24;
+      inkWash(cx - es*2, cy - es*2, es*4, es*4,
+        cx, cy, 0, es*1.3,
+        [[0, 'rgba(245, 200, 125, 0.78)'],
+         [1, 'rgba(245, 200, 125, 0)']]);
+    } else if (cell === "B") {
+      // Boss — bright crimson ink spot + hex glyph
+      inkWash(x - tile*0.1, y - tile*0.1, tile*1.2, tile*1.2,
+        cx + (cellRand(0,0,9)-0.5)*tile*0.15, cy + (cellRand(0,0,10)-0.5)*tile*0.15,
+        0, tile*0.45,
+        [[0, 'rgba(210, 85, 85, 0.42)'],
+         [0.5, 'rgba(180, 70, 70, 0.22)'],
+         [1, 'rgba(150, 55, 55, 0)']]);
+      ctx.fillStyle = 'rgba(235, 110, 110, 0.90)';
+      ctx.font = `${tile*0.55}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('⬡', cx, cy);
+    } else if (cell === "T") {
+      // Trap — bright ochre ink spot + X mark
+      inkWash(x - tile*0.1, y - tile*0.1, tile*1.2, tile*1.2,
+        cx + (cellRand(0,0,11)-0.5)*tile*0.15, cy + (cellRand(0,0,12)-0.5)*tile*0.15,
+        0, tile*0.45,
+        [[0, 'rgba(210, 170, 75, 0.38)'],
+         [0.5, 'rgba(180, 145, 60, 0.20)'],
+         [1, 'rgba(150, 120, 48, 0)']]);
+      ctx.strokeStyle = 'rgba(225, 185, 85, 0.75)';
+      ctx.lineWidth = 1.2 * dpr;
+      var ts = tile * 0.14;
+      ctx.strokeRect(cx - ts, cy - ts, ts*2, ts*2);
+      ctx.beginPath();
+      ctx.moveTo(cx - ts, cy - ts);
+      ctx.lineTo(cx + ts, cy + ts);
+      ctx.moveTo(cx + ts, cy - ts);
+      ctx.lineTo(cx - ts, cy + ts);
+      ctx.stroke();
+    } else if (cell === "C" || cell === "G") {
+      // Coin — bright gold ink spot + strong glowing core
+      inkWash(x - tile*0.1, y - tile*0.1, tile*1.2, tile*1.2,
+        cx + (cellRand(0,0,13)-0.5)*tile*0.15, cy + (cellRand(0,0,14)-0.5)*tile*0.15,
+        0, tile*0.45,
+        [[0, 'rgba(230, 195, 80, 0.45)'],
+         [0.5, 'rgba(200, 170, 65, 0.24)'],
+         [1, 'rgba(170, 145, 50, 0)']]);
+      inkWash(cx - tile*0.2, cy - tile*0.2, tile*0.4, tile*0.4,
+        cx, cy, 0, tile*0.2,
+        [[0, 'rgba(255, 225, 120, 0.92)'],
+         [1, 'rgba(255, 225, 120, 0)']]);
     }
-    drawBadge(x, y, tile, info.label.slice(0, 1), info.color);
   }
 
-  function drawBadge(x, y, tile, text, color) {
-    const radius = tile * 0.3;
-    ctx.beginPath();
-    ctx.arc(x + tile / 2, y + tile / 2, radius, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.9)";
-    ctx.lineWidth = Math.max(1, tile * 0.045);
-    ctx.stroke();
-    ctx.fillStyle = "#fff";
-    ctx.font = `800 ${Math.max(11, tile * 0.34)}px sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(text, x + tile / 2, y + tile / 2 + tile * 0.02);
-  }
+  function drawFogEdges(frame) {
+    if (!state.showFog || state.mode === "full" || !frame) return;
+    var rows = state.grid.length;
+    var cols = state.grid[0].length;
+    var { originX, originY, tile } = state.layout;
+    var dirs = [[-1,0],[1,0],[0,-1],[0,1]];
 
-  function drawModeOverlay(r, c, x, y, tile, frame) {
-    const baseCell = state.grid[r][c];
-    const heatValue = frame?.heat?.[r]?.[c] || 0;
-    if (state.mode === "risk" && baseCell === "T") {
-      ctx.fillStyle = "rgba(228, 87, 46, 0.38)";
-      ctx.fillRect(x, y, tile, tile);
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        if (!shouldReveal(frame, r, c)) continue;
+        for (var d = 0; d < dirs.length; d++) {
+          var nr = r + dirs[d][0], nc = c + dirs[d][1];
+          if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && !shouldReveal(frame, nr, nc)) {
+            var fx = originX + c * tile, fy = originY + r * tile;
+            var ex = fx + tile*0.5, ey = fy + tile*0.5;
+            if (dirs[d][1] === -1) ex = fx;
+            if (dirs[d][1] === 1)  ex = fx + tile;
+            if (dirs[d][0] === -1) ey = fy;
+            if (dirs[d][0] === 1)  ey = fy + tile;
+            // Ink-wash glow at fog boundary (visible warm gray)
+            var glow = ctx.createRadialGradient(ex, ey, 0, ex, ey, tile*0.4);
+            glow.addColorStop(0, 'rgba(160, 150, 175, 0.22)');
+            glow.addColorStop(1, 'rgba(160, 150, 175, 0)');
+            ctx.fillStyle = glow;
+            ctx.fillRect(ex - tile*0.4, ey - tile*0.4, tile*0.8, tile*0.8);
+          }
+        }
+      }
     }
-    if (state.mode === "reward" && (baseCell === "C" || baseCell === "G")) {
-      ctx.fillStyle = "rgba(47, 158, 68, 0.32)";
-      ctx.fillRect(x, y, tile, tile);
-    }
-    if (state.showHeat && heatValue > 0) {
-      const alpha = Math.min(0.46, 0.12 + heatValue * 0.07);
-      ctx.fillStyle = `rgba(109, 93, 252, ${alpha})`;
-      ctx.fillRect(x, y, tile, tile);
-    }
-  }
-
-  function drawGridLine(x, y, tile, color) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = Math.max(1, state.layout.dpr);
-    ctx.strokeRect(x + 0.5, y + 0.5, tile - 1, tile - 1);
   }
 
   function drawPath(frame) {
     const { originX, originY, tile } = state.layout;
-    const toPoint = (pos) => ({
-      x: originX + pos.c * tile + tile / 2,
-      y: originY + pos.r * tile + tile / 2,
-    });
 
-    drawRouteSegment(state.route, 0, state.route.length - 1, "rgba(15, 139, 141, 0.25)", Math.max(2, tile * 0.12), toPoint);
+    // Visited path cell overlays — diluted rose ink wash
+    if (frame && state.frameIndex >= 0) {
+      for (var i = 0; i <= state.frameIndex; i++) {
+        var p = state.route[i];
+        var px = originX + p.c * tile + tile/2;
+        var py = originY + p.r * tile + tile/2;
+        var offX = (cellRand(p.r, p.c, 20) - 0.5) * tile * 0.25;
+        var offY = (cellRand(p.r, p.c, 21) - 0.5) * tile * 0.25;
+        var baseAlpha = (state.grid[p.r] && state.grid[p.r][p.c] !== "#") ? 0.07 : 0.04;
+        inkWash(px - tile*0.5, py - tile*0.5, tile, tile,
+          px + offX, py + offY, 0, tile*0.55,
+          [[0, 'rgba(170, 90, 110, ' + baseAlpha + ')'],
+           [0.5, 'rgba(140, 70, 90, ' + (baseAlpha*0.5) + ')'],
+           [1, 'rgba(110, 50, 70, 0)']]);
+      }
+    }
+
+    var toPoint = function(pos) { return { x: originX + pos.c * tile + tile/2, y: originY + pos.r * tile + tile/2 }; };
+
     if (frame) {
-      drawRouteSegment(state.route, 0, state.frameIndex, "rgba(242, 165, 65, 0.88)", Math.max(3, tile * 0.16), toPoint);
+      // Traveled route — strong rose ink line
+      drawRouteSegment(state.route, 0, state.frameIndex, 'rgba(195, 110, 140, 0.85)', Math.max(3, tile*0.14), toPoint);
     }
   }
 
@@ -1974,27 +2413,51 @@
 
   function drawFocus(frame) {
     if (!frame) return;
-    const { originX, originY, tile } = state.layout;
-    const x = originX + frame.pos.c * tile;
-    const y = originY + frame.pos.r * tile;
+    const { originX, originY, tile, dpr } = state.layout;
 
-    ctx.save();
-    ctx.shadowColor = "rgba(242, 165, 65, 0.75)";
-    ctx.shadowBlur = tile * 0.5;
-    const player = state.assets.player;
-    if (state.showSprites && player && player.complete) {
-      const inset = tile * 0.06;
-      ctx.drawImage(player, x + inset, y + inset, tile - inset * 2, tile - inset * 2);
+    var pc, pr;
+    if (state.animPlayerX != null) {
+      pc = state.animPlayerX; pr = state.animPlayerY;
     } else {
-      drawBadge(x, y, tile, "P", "#0f8b8d");
+      pc = frame.pos.c; pr = frame.pos.r;
     }
-    ctx.restore();
+
+    const x = originX + pc * tile;
+    const y = originY + pr * tile;
+    const cx = x + tile / 2, cy = y + tile / 2;
+
+    // Player ambient glow — bright rose ink wash
+    var glowGrad = ctx.createRadialGradient(cx, cy, tile*0.1, cx, cy, tile*0.8);
+    glowGrad.addColorStop(0, 'rgba(210, 110, 145, 0.35)');
+    glowGrad.addColorStop(1, 'rgba(210, 110, 145, 0)');
+    ctx.fillStyle = glowGrad;
+    ctx.fillRect(x - tile*0.3, y - tile*0.3, tile*1.6, tile*1.6);
+
+    var player = state.assets.player;
+    if (state.showSprites && player && player.complete) {
+      ctx.drawImage(player, x + tile*0.08, y + tile*0.08, tile*0.84, tile*0.84);
+    } else {
+      // Player diamond — bright sumi-e ink style (crimson)
+      ctx.save();
+      ctx.shadowColor = 'rgba(200, 90, 125, 0.45)';
+      ctx.shadowBlur = 10 * dpr;
+      ctx.fillStyle = 'rgba(225, 115, 150, 0.92)';
+      ctx.beginPath();
+      var ds = tile * 0.22;
+      ctx.moveTo(cx, cy - ds);
+      ctx.lineTo(cx + ds*0.8, cy);
+      ctx.lineTo(cx, cy + ds*0.6);
+      ctx.lineTo(cx - ds*0.8, cy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
 
     if (state.showFog && state.mode !== "full") {
-      ctx.strokeStyle = "rgba(255,255,255,0.85)";
-      ctx.lineWidth = Math.max(2, tile * 0.06);
-      const size = tile * (VIEW_RADIUS * 2 + 1);
-      ctx.strokeRect(x - tile * VIEW_RADIUS, y - tile * VIEW_RADIUS, size, size);
+      ctx.strokeStyle = "rgba(0,229,255,0.35)";
+      ctx.lineWidth = Math.max(1.5, dpr);
+      var size = tile * (VIEW_RADIUS * 2 + 1);
+      ctx.strokeRect(x - tile*VIEW_RADIUS, y - tile*VIEW_RADIUS, size, size);
     }
   }
 
@@ -2004,9 +2467,27 @@
     const { originX, originY, tile } = state.layout;
     const x = originX + target.c * tile;
     const y = originY + target.r * tile;
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = Math.max(2, tile * 0.055);
+    ctx.strokeStyle = 'rgba(160, 150, 170, 0.45)';
+    ctx.lineWidth = Math.max(1.2, tile * 0.04);
     ctx.strokeRect(x + 2, y + 2, tile - 4, tile - 4);
+  }
+
+  // Paper grain overlay — very subtle noise texture, sparse samples so it does not blur edges
+  function drawPaperGrain() {
+    var w = state.layout.width, h = state.layout.height;
+    var imgData = ctx.getImageData(0, 0, w, h);
+    var data = imgData.data;
+    var seed = 7.731;
+    for (var i = 0; i < data.length; i += 40) {
+      var px = (i / 4) % w;
+      var py = Math.floor((i / 4) / w);
+      var n = Math.sin(px * 0.13 + py * 0.07 + seed) * 43758.5453;
+      n = (n - Math.floor(n) - 0.5) * 3;
+      data[i] = Math.min(255, Math.max(0, data[i] + n));
+      data[i+1] = Math.min(255, Math.max(0, data[i+1] + n));
+      data[i+2] = Math.min(255, Math.max(0, data[i+2] + n));
+    }
+    ctx.putImageData(imgData, 0, 0);
   }
 
   function drawEffects(frame) {
@@ -2028,7 +2509,7 @@
     const frame = currentFrame();
     const routeLength = Math.max(0, state.route.length - 1);
     if (!frame) {
-      els.runState.textContent = "待机";
+      els.runState.textContent = "Standby";
       return;
     }
 
@@ -2037,7 +2518,7 @@
     els.metricExplored.textContent = `${Math.round(frame.exploredRatio * 100)}%`;
     els.metricRoute.textContent = String(routeLength);
     els.phaseLabel.textContent = frame.phase;
-    els.runState.textContent = state.playing ? "播放中" : "已暂停";
+    els.runState.textContent = state.playing ? "Playing" : "Paused";
     els.timeline.value = String(state.frameIndex);
     els.playBtn.textContent = state.playing ? "Ⅱ" : "▶";
 
@@ -2050,7 +2531,7 @@
       els.tileCoord.textContent = "-";
       els.tileType.textContent = "-";
       els.tileWeight.textContent = "-";
-      els.cellReadout.textContent = "悬停查看格子";
+      els.cellReadout.textContent = "Hover tile for info";
       return;
     }
 
@@ -2058,7 +2539,7 @@
     const visibleGrid = frame ? frame.grid : state.grid;
     const revealed = !frame || shouldReveal(frame, pos.r, pos.c);
     const cell = revealed ? visibleGrid[pos.r][pos.c] : null;
-    const info = cell === null ? { label: "未知", weight: "-", color: "#11161d" } : (TILE[cell] || TILE[" "]);
+    const info = cell === null ? { label: "Unknown", weight: "-", color: "#05040a" } : (TILE[cell] || TILE[" "]);
     els.tileCoord.textContent = `${pos.r}, ${pos.c}`;
     els.tileType.textContent = info.label;
     els.tileWeight.textContent = info.weight;
@@ -2087,14 +2568,14 @@
 
   function renderLegend() {
     const entries = [
-      ["#", "墙体"],
-      ["S", "起点"],
-      ["E", "出口"],
+      ["#", "Wall"],
+      ["S", "Start"],
+      ["E", "Exit"],
       ["B", "Boss"],
-      ["T", "陷阱"],
-      ["G", "金币"],
-      [" ", "通路"],
-      [null, "未知"],
+      ["T", "Trap"],
+      ["G", "Coin"],
+      [" ", "Path"],
+      [null, "Unknown"],
     ];
     els.legendGrid.innerHTML = "";
     entries.forEach(([cell, label]) => {
@@ -2103,7 +2584,7 @@
       const text = document.createElement("span");
       item.className = "legend-item";
       swatch.className = "legend-swatch";
-      swatch.style.background = cell === null ? "#11161d" : (TILE[cell] || TILE[" "]).color;
+      swatch.style.background = cell === null ? "#05040a" : (TILE[cell] || TILE[" "]).color;
       text.textContent = label;
       item.append(swatch, text);
       els.legendGrid.appendChild(item);
@@ -2129,6 +2610,10 @@
   }
 
   function step(delta) {
+    state.animPlayerX = null;
+    state.animPlayerY = null;
+    state.animProgress = null;
+    state.animToFrame = null;
     setFrame(state.frameIndex + delta);
   }
 
@@ -2146,17 +2631,67 @@
   function startPlayback() {
     if (!state.frames.length || state.playing) return;
     state.playing = true;
-    els.runState.textContent = "播放中";
+    state.animRafId = null;
+    state.lastFrameTime = 0;
+    els.runState.textContent = "Playing";
     els.playBtn.textContent = "Ⅱ";
     scheduleTick();
+  }
+
+  // ---- BGM ----
+  var bgmEls = {
+    intro: document.getElementById('bgmIntro'),
+    maze: document.getElementById('bgmMaze'),
+    boss: document.getElementById('bgmBoss'),
+  };
+  var bgmState = { current: null, fadeTimer: null };
+
+  function bgmPlay(el) {
+    if (!el) return;
+    el.volume = 0.35;
+    el.currentTime = 0;
+    el.play().catch(function(){});
+    bgmState.current = el;
+  }
+
+  function bgmCrossfade(toEl, duration) {
+    duration = duration || 700;
+    if (bgmState.fadeTimer) { clearInterval(bgmState.fadeTimer); bgmState.fadeTimer = null; }
+    if (!toEl || bgmState.current === toEl) return;
+    var from = bgmState.current;
+    var startVol = from ? from.volume : 0.35;
+    toEl.volume = 0;
+    toEl.play().catch(function(){});
+    var steps = 20, stepTime = duration / steps, i = 0;
+    bgmState.fadeTimer = setInterval(function() {
+      i++;
+      var t = i / steps;
+      if (from) from.volume = Math.max(0, startVol * (1 - t));
+      toEl.volume = Math.min(0.35, 0.35 * t);
+      if (i >= steps) {
+        clearInterval(bgmState.fadeTimer);
+        bgmState.fadeTimer = null;
+        if (from) { from.pause(); from.currentTime = 0; }
+        bgmState.current = toEl;
+      }
+    }, stepTime);
+  }
+
+  function bgmStopAll() {
+    if (bgmState.fadeTimer) { clearInterval(bgmState.fadeTimer); bgmState.fadeTimer = null; }
+    [bgmEls.intro, bgmEls.maze, bgmEls.boss].forEach(function(el) {
+      if (el) { el.pause(); el.currentTime = 0; }
+    });
+    bgmState.current = null;
   }
 
   function stopPlayback() {
     state.playing = false;
     if (state.timer) window.clearTimeout(state.timer);
     state.timer = null;
+    if (state.animRafId) { window.cancelAnimationFrame(state.animRafId); state.animRafId = null; }
     els.playBtn.textContent = "▶";
-    if (state.frames.length) els.runState.textContent = "已暂停";
+    if (state.frames.length) els.runState.textContent = "Paused";
   }
 
   function togglePlayback() {
@@ -2174,17 +2709,63 @@
 
   function scheduleTick() {
     if (!state.playing || state.bossBattleActive) return;
-    state.timer = window.setTimeout(() => {
-      setFrame(state.frameIndex + 1);
-      scheduleTick();
-    }, Math.max(40, 650 / state.speed));
+    var frame = currentFrame();
+    if (!frame) { state.timer = window.setTimeout(scheduleTick, 100); return; }
+
+    var stepDelay = Math.max(80, 800 / state.speed);
+    var nextIdx = state.frameIndex + 1;
+    if (nextIdx >= state.frames.length) { stopPlayback(); return; }
+
+    var nextFrame = state.frames[nextIdx];
+    var isSamePos = nextFrame.pos.r === frame.pos.r && nextFrame.pos.c === frame.pos.c;
+    if (isSamePos) {
+      setFrame(nextIdx);
+      state.timer = window.setTimeout(scheduleTick, stepDelay * 0.3);
+      return;
+    }
+
+    state.animRafId = window.requestAnimationFrame(function (timestamp) {
+      animateStep(frame, nextFrame, nextIdx, timestamp, stepDelay);
+    });
+  }
+
+  function animateStep(fromFrame, toFrame, toIdx, startTime, duration) {
+    var elapsed = performance.now() - startTime;
+    var t = Math.min(1, elapsed / duration);
+    var eased = 1 - Math.pow(1 - t, 3);
+
+    var fromX = fromFrame.pos.c, fromY = fromFrame.pos.r;
+    var toX = toFrame.pos.c, toY = toFrame.pos.r;
+    state.animPlayerX = fromX + (toX - fromX) * eased;
+    state.animPlayerY = fromY + (toY - fromY) * eased;
+    state.animProgress = eased;
+    state.animToFrame = toFrame;
+
+    draw();
+    updateUi();
+
+    if (t < 1) {
+      state.animRafId = window.requestAnimationFrame(function () {
+        animateStep(fromFrame, toFrame, toIdx, startTime, duration);
+      });
+    } else {
+      state.animPlayerX = null;
+      state.animPlayerY = null;
+      state.animProgress = null;
+      state.animToFrame = null;
+      setFrame(toIdx);
+      state.timer = window.setTimeout(scheduleTick, Math.max(30, duration * 0.15));
+    }
   }
 
   function reset() {
     stopPlayback();
     closeBossOverlay(false);
+    exitBattleMode();
+    hideBattlePrompt();
     resetBossBattleReplayState();
     setFrame(0);
+    showActors();
   }
 
   function buildBossBattlePayload(frame) {
@@ -2262,7 +2843,7 @@
 
   function showBossWinAlert(outcome) {
     clearBossWinAlert();
-    els.bossWinMeta.textContent = outcome.bossIndex ? `Boss ${outcome.bossIndex} 已击败` : "Boss 已击败";
+    els.bossWinMeta.textContent = outcome.bossIndex ? `Boss ${outcome.bossIndex} defeated` : "Boss defeated";
     els.bossWinAlert.hidden = false;
     els.bossWinAlert.setAttribute("aria-hidden", "false");
     void els.bossWinAlert.offsetWidth;
@@ -2280,10 +2861,11 @@
     state.bossBattlePendingFrame = state.frameIndex;
     state.bossAutoResume = true;
     stopPlayback();
+    bgmStopAll(); // iframe has its own BGM
     document.body.classList.add("overlay-open");
     els.bossOverlay.hidden = false;
     els.bossOverlay.setAttribute("aria-hidden", "false");
-    els.bossOverlayTitle.textContent = `Boss ${payload.bossIndex} 战斗中`;
+    els.bossOverlayTitle.textContent = `Boss ${payload.bossIndex} in combat`;
     ensureBossFrameLoaded();
     if (state.bossFrameReady) {
       dispatchBossBattle(payload);
@@ -2306,6 +2888,7 @@
     scheduleTrapHide(currentFrame());
     playPendingBossOutcomeEffect();
     state.bossAutoResume = false;
+    bgmCrossfade(bgmEls.maze); // resume maze BGM after overlay closes
     if (shouldResume) startPlayback();
   }
 
@@ -2314,7 +2897,8 @@
     if (!frame?.bossEncounter || state.bossBattleActive || state.bossAlertTimer) return;
     if (state.bossBattleQueue.includes(state.frameIndex)) return;
     state.bossBattleQueue.push(state.frameIndex);
-    queueBossOverlay(frame);
+    stopPlayback();
+    showBattlePrompt();
   }
 
   function handleBossOverlayMessage(event) {
@@ -2333,7 +2917,7 @@
     if (!state.bossBattleActive) return;
     const frame = currentFrame();
     const status = data.result === 1 ? "已结束（胜利）" : "已结束（失败）";
-    els.bossOverlayTitle.textContent = `Boss ${data.bossIndex ?? ""} 战斗${status}`;
+    els.bossOverlayTitle.textContent = `Boss ${data.bossIndex ?? ""} battle${status}`;
     state.pendingBossOutcome = {
       result: data.result === 1 ? "win" : "lose",
       frameIndex: state.bossBattlePendingFrame ?? state.frameIndex,
@@ -2364,15 +2948,16 @@
     els.startGameBtn.disabled = true;
     resetBossBattleReplayState();
     setFrame(0);
+    bgmCrossfade(bgmEls.maze);
     document.body.classList.add("intro-leaving");
-    window.setTimeout(() => {
+    window.setTimeout(function () {
       document.body.classList.remove("intro-active", "intro-leaving");
+      els.canvas.offsetHeight; // force reflow
+      fitCanvas();
+      draw();
+      showActors();
       startPlayback();
-    }, 560);
-  }
-
-  function openMapImporter() {
-    els.fileInput.click();
+    }, 600);
   }
 
   function canvasToCell(event) {
@@ -2389,8 +2974,7 @@
   function bindEvents() {
     els.startGameBtn.disabled = true;
     els.startGameBtn.addEventListener("click", enterMaze);
-    els.emptyImportBtn.addEventListener("click", openMapImporter);
-    els.introImportBtn.addEventListener("click", openMapImporter);
+    els.emptyImportBtn.addEventListener("click", function () { els.fileInput.click(); });
 
     els.playBtn.addEventListener("click", togglePlayback);
     els.resetBtn.addEventListener("click", reset);
@@ -2405,6 +2989,17 @@
     els.closeBossOverlayBtn.addEventListener("click", () => {
       closeBossOverlay(false);
     });
+    if (els.enterBattleBtn) {
+      els.enterBattleBtn.addEventListener("click", () => {
+        enterBattleMode();
+      });
+    }
+    if (els.battleDataBtn) {
+      els.battleDataBtn.addEventListener("click", toggleBattleDataPanel);
+    }
+    if (els.closeBattleDataBtn) {
+      els.closeBattleDataBtn.addEventListener("click", toggleBattleDataPanel);
+    }
 
     els.timeline.addEventListener("input", (event) => {
       stopPlayback();
@@ -2458,14 +3053,34 @@
       });
     }
 
-    // Compare view-switch buttons (event delegation on compareResults panel)
+    // Compare overlay: close controls + view-switch buttons (event delegation)
+    var compareOverlay = document.getElementById("compareOverlay");
     var comparePanel = document.getElementById("compareResults");
+    function closeCompareOverlay() {
+      if (compareOverlay) {
+        compareOverlay.hidden = true;
+        compareOverlay.classList.remove("is-visible");
+      }
+    }
+    if (compareOverlay) {
+      compareOverlay.addEventListener("click", function (e) {
+        if (e.target === compareOverlay || e.target.classList.contains("compare-overlay-backdrop")) {
+          closeCompareOverlay();
+        }
+      });
+      var closeCompareBtn = document.getElementById("closeCompareOverlayBtn");
+      if (closeCompareBtn) closeCompareBtn.addEventListener("click", closeCompareOverlay);
+    }
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && compareOverlay && !compareOverlay.hidden) closeCompareOverlay();
+    });
     if (comparePanel) {
       comparePanel.addEventListener("click", function (e) {
         var btn = e.target.closest("[data-compare-view]");
         if (!btn) return;
         var mode = btn.getAttribute("data-compare-view");
         window._viewAlgo(mode);
+        closeCompareOverlay();
       });
     }
     els.fileInput.addEventListener("change", async (event) => {
@@ -2475,7 +3090,7 @@
         const data = JSON.parse(await file.text());
         initMap(data, file.name);
       } catch (error) {
-        els.mapMeta.textContent = `导入失败：${error.message}`;
+        els.mapMeta.textContent = `Import failed: ${error.message}`;
       } finally {
         els.fileInput.value = "";
       }
@@ -2499,11 +3114,31 @@
 
     window.addEventListener("resize", draw);
     window.addEventListener("message", handleBossOverlayMessage);
+
+    // Use ResizeObserver to detect stage-area size changes (sidebar open/close, transitions, etc.)
+    if (typeof ResizeObserver !== "undefined" && els.canvas.parentElement) {
+      var ro = new ResizeObserver(function () {
+        fitCanvas();
+        draw();
+      });
+      ro.observe(els.canvas.parentElement);
+    }
   }
 
   loadAssets();
   renderLegend();
   bindEvents();
+  populateMapSelector();
+  initSidebars();
   initEmptyState();
   ensureBossFrameLoaded();
+
+  // Start intro BGM on first user interaction (browser autoplay policy)
+  document.addEventListener('click', function bgmInitClick() {
+    document.removeEventListener('click', bgmInitClick);
+    if (!bgmState.current) bgmPlay(bgmEls.intro);
+  }, { once: true });
+
+  // Expose for testing / debugging
+  window._battleTest = { enterBattleMode, exitBattleMode, showBattlePrompt };
 })();

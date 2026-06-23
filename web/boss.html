@@ -1,227 +1,159 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI Maze Boss 战可视化</title>
-    <link rel="stylesheet" href="./styles.css" />
-    <link rel="stylesheet" href="./boss.css" />
-  </head>
-  <body class="boss-page">
-    <section id="introScreen" class="intro-screen" aria-label="Boss 战开始界面">
-      <div class="intro-backdrop" aria-hidden="true">
-        <div class="intro-grid-lines"></div>
-        <div class="scanline"></div>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Boss Battle</title>
+<link rel="stylesheet" href="./styles.css">
+<link rel="stylesheet" href="./boss.css">
+</head>
+<body class="boss-page">
+
+<!-- Atmospheric Background -->
+<div id="void-bg"></div>
+<div id="scanlines"></div>
+<div id="chroma"></div>
+<div id="particles"></div>
+
+<!-- ===== MAIN BATTLE VIEW ===== -->
+<main class="battle-shell">
+
+  <!-- TOP BAR -->
+  <header class="battle-header">
+    <div class="battle-brand">
+      <span class="battle-title">BOSS BATTLE</span>
+      <span id="battleName" class="battle-map-name">maze_15_15.json</span>
+    </div>
+    <div class="battle-status">
+      <span id="runState" class="status-badge">Standby</span>
+      <span id="phaseLabel" class="phase-badge">初始化</span>
+    </div>
+  </header>
+
+  <!-- BATTLE ARENA -->
+  <section class="battle-arena">
+
+    <!-- LEFT: Player -->
+    <aside class="actor-panel actor-player">
+      <div class="actor-frame">
+        <img src="./assets/leaper_idle.png" class="actor-svg actor-leaper" alt="Drifter" draggable="false">
+        <div class="actor-label">
+          <span class="actor-name">DRIFTER</span>
+          <span id="playerHp" class="actor-hp">Coins: --</span>
+        </div>
       </div>
+    </aside>
 
-      <div class="intro-content boss-intro-content">
-        <div class="intro-copy">
-          <p class="eyebrow">AI Maze Boss Visualizer</p>
-          <h1>进入 Boss 战</h1>
-          <p class="intro-tagline">聚焦技能循环、伤害命中与失败重试，只看战斗，不看迷宫。</p>
-
-          <div class="intro-stats" aria-label="战斗概览">
-            <div>
-              <span>Boss</span>
-              <strong id="introBossCount">--</strong>
-            </div>
-            <div>
-              <span>技能</span>
-              <strong id="introSkillCount">--</strong>
-            </div>
-            <div>
-              <span>回合上限</span>
-              <strong id="introRoundCap">--</strong>
-            </div>
-          </div>
-
-          <div id="introSkillPreview" class="intro-skill-preview" aria-label="技能预览"></div>
-
-          <button id="startBattleBtn" class="start-btn" type="button">
-            <span>开始战斗</span>
-            <span class="start-mark">›</span>
-          </button>
-        </div>
-
-        <div class="intro-visual" aria-hidden="true">
-          <div class="intro-device boss-device">
-            <div class="device-top">
-              <span></span>
-              <span></span>
-              <span></span>
-            </div>
-            <div class="boss-hero-scene">
-              <div class="hero-glow hero-glow-player"></div>
-              <div class="hero-glow hero-glow-boss"></div>
-              <div class="hero-floor"></div>
-              <div class="boss-slash"></div>
-              <img class="boss-hero-player" src="../viz/assets/player.png" alt="" />
-              <img class="boss-hero-enemy" src="./assets/boss.png" alt="" />
-              <div id="introBossWave" class="boss-wave-strip"></div>
-            </div>
-          </div>
-          <div id="introMeta" class="intro-meta">正在装载 Boss 战配置...</div>
-        </div>
+    <!-- CENTER: Maze + Combat Stage -->
+    <section class="stage-panel">
+      <div class="maze-frame">
+        <canvas id="mazeCanvas" aria-label="迷宫地图"></canvas>
+      </div>
+      <div class="combat-overlay" id="combatOverlay">
+        <div class="skill-effect" id="skillEffect"></div>
+        <div class="damage-text" id="damageText"></div>
       </div>
     </section>
 
-    <main class="app-shell boss-shell">
-      <aside class="panel control-panel" aria-label="Boss 战控制台">
-        <div class="brand-block">
-          <p class="eyebrow">AI Maze Combat Replay</p>
-          <h1>Boss 战技能回放</h1>
-          <div class="status-row">
-            <span id="battleName" class="status-pill">maze_15_15.json</span>
-            <span id="runState" class="status-pill accent">待机</span>
-          </div>
+    <!-- RIGHT: Boss -->
+    <aside class="actor-panel actor-boss">
+      <div class="actor-frame">
+        <img src="./assets/boss_awaken.png" class="actor-svg actor-boss-anim" alt="Judgement" draggable="false">
+        <div class="actor-label">
+          <span class="actor-name">JUDGEMENT</span>
+          <span id="bossHp" class="actor-hp">HP: --</span>
         </div>
+      </div>
+    </aside>
 
-        <section class="metrics-grid" aria-label="战斗指标">
-          <div class="metric-tile">
-            <span>当前 Boss</span>
-            <strong id="metricBoss">0 / 0</strong>
-          </div>
-          <div class="metric-tile">
-            <span>尝试</span>
-            <strong id="metricAttempt">0</strong>
-          </div>
-          <div class="metric-tile">
-            <span>总回合</span>
-            <strong id="metricRound">0</strong>
-          </div>
-          <div class="metric-tile">
-            <span>金币</span>
-            <strong id="metricCoins">0</strong>
-          </div>
-        </section>
+  </section>
 
-        <section class="tool-section" aria-label="播放控制">
-          <div class="section-title">播放</div>
-          <div class="button-row">
-            <button id="resetBtn" type="button" class="icon-btn" aria-label="重置">↺</button>
-            <button id="prevBtn" type="button" class="icon-btn" aria-label="上一帧">‹</button>
-            <button id="playBtn" type="button" class="primary-btn" aria-label="播放或暂停">▶</button>
-            <button id="nextBtn" type="button" class="icon-btn" aria-label="下一帧">›</button>
-          </div>
-          <label class="range-field">
-            <span>进度</span>
-            <input id="timeline" type="range" min="0" max="0" value="0" />
-          </label>
-          <label class="range-field">
-            <span>速度</span>
-            <input id="speedRange" type="range" min="1" max="12" value="5" />
-            <output id="speedLabel">5x</output>
-          </label>
-        </section>
+  <!-- BOTTOM: Controls -->
+  <footer class="battle-controls">
+    <div class="control-group">
+      <button id="resetBtn" type="button" class="ctrl-btn" aria-label="Reset">↺</button>
+      <button id="prevBtn" type="button" class="ctrl-btn" aria-label="Prev">◀</button>
+      <button id="playBtn" type="button" class="ctrl-btn primary" aria-label="Play/Pause">▶</button>
+      <button id="nextBtn" type="button" class="ctrl-btn" aria-label="Next">▶</button>
+    </div>
+    <div class="timeline-group">
+      <input id="timeline" type="range" min="0" max="0" value="0">
+      <span id="frameCounter" class="frame-counter">0 / 0</span>
+    </div>
+    <div class="speed-group">
+      <label>Speed</label>
+      <input id="speedRange" type="range" min="1" max="12" value="5">
+      <output id="speedLabel">5x</output>
+    </div>
+  </footer>
 
-        <section class="tool-section" aria-label="视图模式">
-          <div class="section-title">视图</div>
-          <div class="segmented-control" role="tablist" aria-label="战斗视图">
-            <button type="button" class="segment active" data-mode="live">实况</button>
-            <button type="button" class="segment" data-mode="damage">伤害</button>
-            <button type="button" class="segment" data-mode="cooldown">冷却</button>
-            <button type="button" class="segment" data-mode="outcome">结算</button>
-          </div>
+</main>
 
-          <div class="toggle-grid">
-            <label class="toggle-field">
-              <input id="toggleTrail" type="checkbox" checked />
-              <span>轨迹</span>
-            </label>
-            <label class="toggle-field">
-              <input id="toggleGlow" type="checkbox" checked />
-              <span>辉光</span>
-            </label>
-            <label class="toggle-field">
-              <input id="toggleSprites" type="checkbox" checked />
-              <span>贴图</span>
-            </label>
-            <label class="toggle-field">
-              <input id="togglePulse" type="checkbox" checked />
-              <span>脉冲</span>
-            </label>
-          </div>
-        </section>
+<!-- DATA PANEL TOGGLE -->
+<button id="dataToggleBtn" type="button" class="data-toggle" aria-label="Toggle data panel">
+  <span>DATA</span>
+</button>
 
-        <section class="tool-section" aria-label="战斗参数">
-          <div class="section-title">参数</div>
-          <label class="number-field">
-            <span>初始金币</span>
-            <input id="startingCoinsInput" type="number" min="0" step="1" value="0" />
-          </label>
-          <div class="button-row">
-            <button id="rebuildBtn" type="button" class="secondary-btn">重新模拟</button>
-          </div>
-        </section>
+<!-- DATA PANEL (Hidden by default) -->
+<aside id="dataPanel" class="data-panel hidden">
+  <div class="data-panel-header">
+    <span class="data-title">Combat Data</span>
+    <button id="closeDataBtn" type="button" class="close-btn" aria-label="Close">×</button>
+  </div>
+  <div class="data-panel-body">
+    <section class="data-section">
+      <h3>Metrics</h3>
+      <div class="data-grid">
+        <div><span>Boss</span><strong id="metricBoss">0/0</strong></div>
+        <div><span>Attempt</span><strong id="metricAttempt">0</strong></div>
+        <div><span>Round</span><strong id="metricRound">0</strong></div>
+        <div><span>Coins</span><strong id="metricCoins">0</strong></div>
+      </div>
+    </section>
+    <section class="data-section">
+      <h3>Current Round</h3>
+      <dl class="detail-list">
+        <div><dt>Boss</dt><dd id="detailBoss">-</dd></div>
+        <div><dt>Attempt</dt><dd id="detailAttempt">-</dd></div>
+        <div><dt>Turn</dt><dd id="detailTurn">-</dd></div>
+        <div><dt>Action</dt><dd id="detailAction">-</dd></div>
+        <div><dt>Damage</dt><dd id="detailDamage">-</dd></div>
+        <div><dt>Result</dt><dd id="detailBossHp">-</dd></div>
+      </dl>
+    </section>
+    <section class="data-section">
+      <h3>Skill Status</h3>
+      <div id="skillList" class="skill-list"></div>
+    </section>
+    <section class="data-section grow">
+      <h3>Event Log</h3>
+      <ol id="eventList" class="event-list"></ol>
+    </section>
+  </div>
+</aside>
 
-        <section class="tool-section" aria-label="地图文件">
-          <div class="section-title">地图</div>
-          <div class="button-row">
-            <button id="loadDefaultBtn" type="button" class="secondary-btn">默认地图</button>
-            <label class="file-btn">
-              导入 JSON
-              <input id="fileInput" type="file" accept="application/json,.json" />
-            </label>
-          </div>
-          <p id="mapMeta" class="meta-text">正在加载 Boss 战配置...</p>
-        </section>
-      </aside>
+<audio id="bgmBoss" src="./assets/bgm/boss.m4a" loop preload="auto" hidden></audio>
 
-      <section class="stage-panel boss-stage-panel" aria-label="Boss 战画布">
-        <div class="stage-topbar">
-          <div>
-            <h2 id="phaseLabel">初始化</h2>
-          </div>
-          <div id="battleReadout" class="cell-readout">等待战斗数据</div>
-        </div>
-        <div class="canvas-frame boss-canvas-frame">
-          <canvas id="bossCanvas" width="1280" height="720" aria-label="Boss 战可视化画布"></canvas>
-        </div>
-      </section>
-
-      <aside class="panel insight-panel" aria-label="战斗详情">
-        <section class="insight-section">
-          <div class="section-title">当前回合</div>
-          <dl class="detail-grid boss-detail-grid">
-            <div>
-              <dt>Boss</dt>
-              <dd id="detailBoss">-</dd>
-            </div>
-            <div>
-              <dt>尝试</dt>
-              <dd id="detailAttempt">-</dd>
-            </div>
-            <div>
-              <dt>攻击轮</dt>
-              <dd id="detailTurn">-</dd>
-            </div>
-            <div>
-              <dt>动作</dt>
-              <dd id="detailAction">-</dd>
-            </div>
-            <div>
-              <dt>伤害</dt>
-              <dd id="detailDamage">-</dd>
-            </div>
-            <div>
-              <dt>结果</dt>
-              <dd id="detailBossHp">-</dd>
-            </div>
-          </dl>
-        </section>
-
-        <section class="insight-section">
-          <div class="section-title">技能状态</div>
-          <div id="skillList" class="skill-list"></div>
-        </section>
-
-        <section class="insight-section grow">
-          <div class="section-title">战斗事件流</div>
-          <ol id="eventList" class="event-list"></ol>
-        </section>
-      </aside>
-    </main>
-
-    <script src="./boss.js?v=20260526-boss" defer></script>
-  </body>
+<script>
+(()=>{
+  var c=document.getElementById('particles');
+  if(c){
+    var colors=['#ff2d95','#ff3355','#ff7700','#ffaa00','#00e5ff'];
+    for(var i=0;i<60;i++){
+      var p=document.createElement('div');
+      p.className='particle';
+      if(Math.random()<.35)p.className+=' '+(Math.random()<.5?'dim':'bright');
+      p.style.left=Math.random()*100+'%';
+      p.style.background=colors[Math.floor(Math.random()*colors.length)];
+      p.style.animationDuration=(5+Math.random()*18)+'s';
+      p.style.animationDelay=Math.random()*14+'s';
+      p.style.width=(1+Math.random()*2.5)+'px';
+      p.style.height=p.style.width;
+      c.appendChild(p);
+    }
+  }
+})();
+</script>
+<script src="./boss.js" charset="utf-8" defer></script>
+</body>
 </html>

@@ -17,6 +17,7 @@ AI_Maze/
 │   ├── base_agent.py            # 【组长/角色1】抽象基类
 │   ├── local_greedy_policy.py   # 【角色2】3×3 视野局部贪心拾取
 │   ├── global_planner.py        # 【角色3】全局探索/收集/冲刺状态机
+│   ├── global_greedy.py         #   记忆增强全局贪心
 │   ├── combat_agent.py          # 【角色3】技能战斗决策
 │   └── composite_agent.py       # 【组长/角色1】组合调度（集成入口）
 │
@@ -25,13 +26,19 @@ AI_Maze/
 │   └── eval_runner.py           #   批量跑图 + 均值/方差统计
 │
 ├── viz/                         # 【角色4/2/3】可视化
-│   └── visualizer.py            #   matplotlib 渲染帧/GIF/路径图
+│   ├── visualizer.py            #   matplotlib 渲染帧/GIF/路径图
+│   └── boss_battle_visualizer.py#   Boss 战可视化
+│
+├── web/                         # Web 可视化面板 → 详见 web/README.md
+├── webapp/                      # 预留 Web 应用目录
 │
 ├── tests/                       # 【角色4】单元测试
 │   ├── test_pathfinding.py
-│   └── test_simulator.py
+│   ├── test_simulator.py
+│   ├── test_local_greedy_policy.py
+│   └── test_combat_agent.py
 │
-├── maze_15_15.json              # 样例迷宫
+├── map/                         # 地图 JSON 文件
 ├── config.json                  # 统一参数配置（权重/阈值，由角色4维护）
 ├── main.py                      # 一键运行入口
 ├── requirements.txt
@@ -55,9 +62,6 @@ python main.py --mode sim --map maze_15_15.json --visualize
 # 本地模拟 + 弹出窗口可视化
 python main.py --mode sim --map maze_15_15.json --visualize-window
 
-# 添加迷宫背景
-将 Kenney 资源下载到 `viz/assets/`，并命名为 `background.png` 或 `floor_tile.png`。程序会自动加载背景图或砖块纹理。
-
 # 批量评测（5 次）
 python main.py --mode eval --map maze_15_15.json --runs 5
 
@@ -67,7 +71,7 @@ pytest tests/ -v
 
 ---
 
-## AI 挑战者视野限制说明
+## AI 挑战者视野限制
 
 | 信息 | 可见性 |
 |------|--------|
@@ -82,14 +86,14 @@ pytest tests/ -v
 
 ---
 
-## 分工对照
+## 分工指引
 
-| 角色 | 主要文件 | 关键接口 |
-|------|---------|---------|
-| 组长/集成（角色1） | `core/state.py`, `core/api_adapter.py`, `agents/base_agent.py`, `agents/composite_agent.py`, `main.py` | `GameContext`, `Action`, `CompositeAgent` |
-| 局部贪心（角色2） | `agents/local_greedy_policy.py` | `LocalGreedyAgent.decide()` |
-| 全局规划（角色3） | `agents/global_planner.py`, `agents/combat_agent.py` | `GlobalPlannerAgent.decide()` |
-| 评测与报告（角色4） | `eval/simulator.py`, `eval/eval_runner.py`, `viz/visualizer.py`, `tests/` | `LocalSimulator.run()`, `run_batch()` |
+| 角色 | 负责模块 |
+|------|---------|
+| 组长/集成 | `core/`、`agents/base_agent.py`、`agents/composite_agent.py`、`main.py` |
+| 局部贪心 | `agents/local_greedy_policy.py` |
+| 全局规划 | `agents/global_planner.py`、`agents/combat_agent.py` |
+| 评测报告 | `eval/`、`viz/`、`tests/`、`config.json` |
 
 ---
 
@@ -103,6 +107,7 @@ pytest tests/ -v
   "global": { "w_coin": 2.0, "w_trap": 1.5, "rush_round_threshold": 5 }
 }
 ```
+
 
 ---
 

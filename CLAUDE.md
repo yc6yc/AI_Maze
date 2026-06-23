@@ -17,12 +17,6 @@ pip install -r requirements.txt
 # 本地模拟一局
 python main.py --mode sim --map maze_15_15.json
 
-# 本地模拟 + 生成 GIF
-python main.py --mode sim --map maze_15_15.json --visualize
-
-# 本地模拟 + 弹出窗口
-python main.py --mode sim --map maze_15_15.json --visualize-window
-
 # 批量评测（N 次取均值/方差）
 python main.py --mode eval --map maze_15_15.json --runs 5
 
