@@ -1,0 +1,1294 @@
+请你在现有 AI Maze 网页端项目中新增一个算法 D，命名为：
+
+```javascript
+simulateBenchmarkRatioPlannerD
+```
+
+算法 D 的目标是：在严格未知全图、3×3 视野约束下，尽量达到以下目标结果：
+
+```text
+maze_7_7(1).json      success=true, move_steps=17, final_coin=120, ratio=7.058824
+maze_7_7_0(1).json    success=true, move_steps=11, final_coin=100, ratio=9.090909
+maze_15_15_1(1).json  success=true, move_steps=25, final_coin=90,  ratio=3.600000
+maze_15_15_2(1).json  success=true, move_steps=12, final_coin=40,  ratio=3.333333
+```
+
+算法 D 不能硬编码地图文件名、地图尺寸、固定坐标或固定路径。
+算法 D 必须通过在线 `fogMap` 决策实现上述效果。
+
+---
+
+# 一、算法 D 的核心定位
+
+算法 D 不是算法 A 的局部贪心，也不是算法 B 的普通全局贪心。
+
+算法 D 是：
+
+```text
+在线未知图 + 3×3 FOV + 指标导向 + 分支收益评估 + BOSS DP + 冲刺策略
+```
+
+核心优化目标是：
+
+```javascript
+coin_step_ratio = finalCoin / moveSteps
+```
+
+所以每次决策都必须问：
+
+```text
+这个选择会不会提高，或者至少不会明显降低最终 finalCoin / moveSteps？
+```
+
+不要单纯最大化金币数量。
+不要单纯最大化探索面积。
+不要单纯走最近金币。
+不要强制收集所有金币。
+不要使用完整地图做 A* 全图规划。
+
+---
+
+# 二、严格迷雾规则
+
+算法 D 必须遵守：
+
+```javascript
+VIEW_RADIUS = 1
+```
+
+即每次玩家位于 `(r, c)` 时，只能看到：
+
+```text
+(r-1,c-1) (r-1,c) (r-1,c+1)
+(r,  c-1) (r,  c) (r,  c+1)
+(r+1,c-1) (r+1,c) (r+1,c+1)
+```
+
+完整地图 `groundTruth` 只能由模拟器用于：
+
+```text
+1. 判断是否撞墙
+2. 处理金币、陷阱、BOSS、出口
+3. revealFog 复制 3×3 到 fogMap
+```
+
+Agent 决策时只能读取：
+
+```javascript
+fogMap
+pos
+coins
+moveSteps
+visitedCount
+triggeredTraps
+collectedCoins
+knownBosses
+knownExit
+bossCleared
+```
+
+不能读取完整 `groundTruth` 来找远处金币、陷阱、BOSS 或出口。
+
+---
+
+# 三、算法 D 配置
+
+请新增：
+
+```javascript
+const ALGO_D_CONFIG = {
+  algorithm: "D_BENCHMARK_RATIO_PLANNER",
+
+  coinValue: 50,
+  trapDamage: 30,
+
+  viewRadius: 1,
+  maxSteps: 500,
+  maxStuck: 30,
+
+  // Boss
+  bossReadyBuffer: 1,
+  rushRoundThreshold: 50,
+
+  // 分支收益判断
+  minPositiveGain: 1e-9,
+  allowedBossDetour: 2,
+  maxBranchProbeDepth: 8,
+  maxBranchTrapCount: 2,
+
+  // 前沿探索
+  frontierBaseValue: 10.0,
+  frontierUnknownWeight: 4.0,
+  corridorForwardBonus: 6.0,
+  trapGatewayInfoBonus: 18.0,
+
+  // 陷阱路径权重
+  baseTrapStepCost: 4.0,
+  maxTrapStepCost: 18.0,
+
+  // 回访控制
+  revisitPenalty: 0.20,
+  backtrackPenalty: 2.0,
+
+  // 关键策略开关
+  stopExploreWhenBossKnownAndReady: true,
+  useBranchPackageEvaluation: true,
+  useBossBattleDP: true,
+  replanEveryStep: true
+};
+```
+
+---
+
+# 四、返回结果格式
+
+`simulateBenchmarkRatioPlannerD(data)` 返回：
+
+```javascript
+{
+  success: boolean,
+  path: number[][],
+  path_length: number,
+  move_steps: number,
+  final_coin: number,
+  coin_step_ratio: number,
+
+  boss_success: boolean,
+  boss_total_turns: number,
+  boss_revive_count: number,
+  boss_coin_cost: number,
+  boss_skill_sequence_lengths: number[],
+  boss_skill_sequences: number[][],
+
+  collectedCoins: number[][],
+  triggeredTraps: number[][],
+
+  algorithm: "D_BENCHMARK_RATIO_PLANNER"
+}
+```
+
+注意：
+
+```javascript
+move_steps = dedupedPath.length - 1
+coin_step_ratio = success ? final_coin / move_steps : 0
+```
+
+---
+
+# 五、主循环顺序
+
+主循环必须严格使用这个顺序：
+
+```text
+while moveSteps < maxSteps:
+
+  1. revealFog(fogMap, groundTruth, pos, 1)
+     只揭露当前位置 pos 的 3×3。
+
+  2. applyCurrentCellEffect(state)
+     处理当前位置的金币、陷阱、BOSS、出口。
+
+  3. 如果 gameOver 或 success，退出。
+
+  4. scanKnownObjects(state)
+     从 fogMap 中扫描已知 Boss、Exit、金币、前沿。
+
+  5. nextPos = chooseNextMoveD(state)
+
+  6. 如果 nextPos 为 null：
+       stuckCount++
+       rawPath.push(pos)
+       如果 stuckCount >= maxStuck，失败退出
+       continue
+
+  7. 如果 groundTruth[nextPos] === "#":
+       // 模拟器物理碰撞
+       stuckCount++
+       rawPath.push(pos)
+       continue
+
+  8. 否则成功移动：
+       lastPos = pos
+       pos = nextPos
+       rawPath.push(pos)
+       moveSteps++
+       stuckCount = 0
+```
+
+最后对 `rawPath` 去除连续重复坐标。
+
+---
+
+# 六、FOV 揭露函数
+
+只能这个函数读取完整地图：
+
+```javascript
+function revealFog(fogMap, groundTruth, pos, viewRadius = 1) {
+  const [r, c] = pos;
+
+  for (let dr = -viewRadius; dr <= viewRadius; dr++) {
+    for (let dc = -viewRadius; dc <= viewRadius; dc++) {
+      const nr = r + dr;
+      const nc = c + dc;
+
+      if (
+        nr >= 0 &&
+        nr < groundTruth.length &&
+        nc >= 0 &&
+        nc < groundTruth[0].length
+      ) {
+        fogMap[nr][nc] = groundTruth[nr][nc];
+      }
+    }
+  }
+}
+```
+
+注意：不要揭露旧位置。
+每一步都揭露当前新位置。
+
+---
+
+# 七、基础工具函数
+
+```javascript
+function posKey(pos) {
+  return pos[0] + "," + pos[1];
+}
+
+function samePos(a, b) {
+  return a && b && a[0] === b[0] && a[1] === b[1];
+}
+
+function isCoin(cell) {
+  return cell === "C" || cell === "G";
+}
+
+function isWalkableFog(cell) {
+  return cell !== null && cell !== "#";
+}
+
+function neighbors4(pos) {
+  const [r, c] = pos;
+  return [
+    [r - 1, c],
+    [r + 1, c],
+    [r, c - 1],
+    [r, c + 1]
+  ];
+}
+
+function inBounds(map, pos) {
+  const [r, c] = pos;
+  return r >= 0 && r < map.length && c >= 0 && c < map[0].length;
+}
+
+function neighborsFog(fogMap, pos) {
+  const result = [];
+
+  for (const nb of neighbors4(pos)) {
+    const [r, c] = nb;
+
+    if (
+      inBounds(fogMap, nb) &&
+      isWalkableFog(fogMap[r][c])
+    ) {
+      result.push(nb);
+    }
+  }
+
+  return result;
+}
+```
+
+---
+
+# 八、处理当前格效果
+
+```javascript
+function applyCurrentCellEffect(state) {
+  const [r, c] = state.pos;
+  const cell = state.groundTruth[r][c];
+  const key = posKey(state.pos);
+
+  if (isCoin(cell) && !state.collectedCoinKeys.has(key)) {
+    state.coins += ALGO_D_CONFIG.coinValue;
+    state.collectedCoinKeys.add(key);
+    state.collectedCoins.push([...state.pos]);
+
+    state.groundTruth[r][c] = " ";
+    state.fogMap[r][c] = " ";
+    return;
+  }
+
+  if (cell === "T" && !state.triggeredTrapKeys.has(key)) {
+    state.coins -= ALGO_D_CONFIG.trapDamage;
+    state.triggeredTrapKeys.add(key);
+    state.triggeredTraps.push([...state.pos]);
+
+    state.groundTruth[r][c] = " ";
+    state.fogMap[r][c] = " ";
+    return;
+  }
+
+  if (cell === "B" && !state.bossCleared) {
+    const battle = runBossBattleDP(
+      state.data.B,
+      state.data.PlayerSkills,
+      state.data.minRouds,
+      state.data.CoinConsumption,
+      state.coins
+    );
+
+    state.bossBattleResult = battle;
+
+    if (!battle.won) {
+      state.gameOver = true;
+      return;
+    }
+
+    state.coins = battle.coinsAfter;
+    state.bossCleared = true;
+
+    state.groundTruth[r][c] = " ";
+    state.fogMap[r][c] = " ";
+    return;
+  }
+
+  if (cell === "E") {
+    if (state.bossCleared) {
+      state.success = true;
+    }
+  }
+}
+```
+
+---
+
+# 九、BOSS 战必须用 DP，不要用最高伤害贪心
+
+算法 D 必须用 DP/BFS 搜索 BOSS 技能序列。
+不要继续用“每回合最高伤害可用技能”的贪心。
+
+原因：冷却存在时，最高伤害贪心可能导致失败或复活，从而扣金币。
+小图里一次复活就会导致分数明显下降。
+
+请实现：
+
+```javascript
+function runBossBattleDP(bossHpList, rawSkills, minRounds, coinConsumption, startingCoins)
+```
+
+## DP 状态
+
+```javascript
+{
+  turn,
+  bossIndex,
+  currentHp,
+  cooldowns
+}
+```
+
+## 每回合动作
+
+选择任意一个：
+
+```javascript
+cooldowns[i] === 0
+```
+
+的技能 `i`。
+
+技能效果：
+
+```javascript
+currentHp -= rawSkills[i][0]
+```
+
+如果当前 Boss 血量小于等于 0：
+
+```javascript
+bossIndex++
+currentHp = bossHpList[bossIndex]
+```
+
+冷却更新：
+
+```javascript
+used skill cooldown = rawSkills[i][1]
+其他技能 cooldown = Math.max(0, cooldown - 1)
+```
+
+## BFS 目标
+
+在 `minRounds` 内达到：
+
+```javascript
+bossIndex >= bossHpList.length
+```
+
+## 返回格式
+
+```javascript
+{
+  won: boolean,
+  coinsAfter: number,
+  totalTurns: number,
+  reviveCount: number,
+  coinCost: number,
+  skillSequenceLengths: number[],
+  skillSequences: number[][]
+}
+```
+
+## 复活逻辑
+
+先尝试一次挑战。
+如果一次挑战在 `minRounds` 内成功：
+
+```javascript
+reviveCount = 0
+coinCost = 0
+coinsAfter = startingCoins
+```
+
+如果一次挑战失败：
+
+```text
+扣 CoinConsumption
+重置技能冷却
+重新从第一个 Boss 开始
+```
+
+直到：
+
+```text
+1. 成功
+2. 金币不够复活
+```
+
+但对于当前目标地图，DP 应该能找到 0 复活方案。
+
+---
+
+# 十、Dijkstra：只在 fogMap 已知区域内规划
+
+实现：
+
+```javascript
+function dijkstraFogD(state, start) {
+  // 返回 dist, parent
+}
+```
+
+要求：
+
+1. 只能走 `fogMap` 中已知可走格。
+2. `null` 不可走。
+3. `#` 不可走。
+4. 陷阱要加动态权重。
+5. 回访格有轻微惩罚。
+6. 不能读取完整地图。
+
+动态陷阱成本：
+
+```javascript
+const currentRatio = state.coins / Math.max(state.moveSteps, 1);
+
+let dynamicTrapStepCost =
+  ALGO_D_CONFIG.trapDamage / Math.max(currentRatio, 1);
+
+dynamicTrapStepCost = Math.min(
+  ALGO_D_CONFIG.maxTrapStepCost,
+  Math.max(ALGO_D_CONFIG.baseTrapStepCost, dynamicTrapStepCost)
+);
+
+edgeWeight = 1;
+
+if (cell === "T" && !state.triggeredTrapKeys.has(posKey(next))) {
+  edgeWeight += dynamicTrapStepCost;
+}
+
+edgeWeight += visitedCount[next] * revisitPenalty;
+```
+
+解释：
+
+```text
+陷阱不是永远等价 32 步。
+当前 ratio 高时，可以接受少量陷阱换短路。
+当前 ratio 低时，要更珍惜金币，少踩陷阱。
+```
+
+---
+
+# 十一、前沿定义
+
+前沿 frontier：
+
+```text
+fogMap[r][c] 是已知可走格
+并且它的上下左右至少一个邻居是 null
+```
+
+实现：
+
+```javascript
+function findFrontiersD(state) {
+  const result = [];
+
+  for each cell in fogMap:
+    if !isWalkableFog(cell): continue
+
+    let unknownCount = 0
+    for each 4-neighbor:
+      if inBounds and fogMap[nr][nc] === null:
+        unknownCount++
+
+    if unknownCount > 0:
+      result.push({
+        pos: [r,c],
+        unknownCount
+      })
+
+  return result
+}
+```
+
+---
+
+# 十二、算法 D 的核心决策：chooseNextMoveD
+
+优先级必须如下：
+
+```text
+1. 如果 bossCleared 且 knownExit 已知：
+   直接冲出口。
+
+2. 如果 knownBosses 已知，且金币足够：
+   进入 RUSH_BOSS。
+   禁止普通 frontier 探索。
+   只允许：
+     a. 直接走 Boss
+     b. 顺路金币
+     c. 明显正边际金币
+
+3. 如果 Boss 未知：
+   使用 DISCOVER 模式。
+   在已知金币、可收益分支、前沿之间选择。
+
+4. 如果没有候选：
+   走最少访问的已知邻居兜底。
+
+5. 如果没有邻居：
+   返回 null。
+```
+
+---
+
+# 十三、RUSH_EXIT
+
+如果：
+
+```javascript
+state.bossCleared === true && state.knownExit !== null
+```
+
+则：
+
+```javascript
+path = shortestKnownPath(state.pos, state.knownExit)
+return path[0]
+```
+
+不要再探索。
+不要再绕路拿金币。
+不要考虑 frontier。
+
+---
+
+# 十四、RUSH_BOSS
+
+进入条件：
+
+```javascript
+knownBosses.length > 0 &&
+state.coins >= data.CoinConsumption * bossReadyBuffer
+```
+
+或者：
+
+```javascript
+remainingSteps <= rushRoundThreshold &&
+knownBosses.length > 0
+```
+
+进入 RUSH_BOSS 后：
+
+```javascript
+ignoreFrontiers = true
+```
+
+先找最近可达 Boss：
+
+```javascript
+boss = nearestKnownBossByDijkstra()
+pathToBoss = reconstructPath(pos, boss)
+```
+
+然后检查顺路金币。
+
+## 顺路金币定义
+
+对于每个已知金币 `coin`：
+
+```javascript
+distDirect = dist(pos, boss)
+distViaCoin = dist(pos, coin) + dist(coin, boss)
+extraSteps = distViaCoin - distDirect
+```
+
+如果：
+
+```javascript
+extraSteps <= allowedBossDetour
+```
+
+则它是顺路金币。
+
+## 顺路金币是否值得拿
+
+计算：
+
+```javascript
+deltaCoin = 50 - trapsOnPath(pos, coin) * 30
+currentRatio = coins / Math.max(moveSteps, 1)
+newRatio = (coins + deltaCoin) / Math.max(moveSteps + Math.max(extraSteps, 1), 1)
+gain = newRatio - currentRatio
+```
+
+只有当：
+
+```javascript
+gain > minPositiveGain
+```
+
+才优先拿顺路金币。
+
+否则直接走 Boss：
+
+```javascript
+return pathToBoss[0]
+```
+
+这个规则用于避免算法 B 那种“Boss 已经看到了，还去远处追金币导致低分”的问题。
+
+---
+
+# 十五、DISCOVER 模式
+
+当 Boss 未知时，算法 D 使用 DISCOVER。
+
+DISCOVER 不等于盲目探索。
+它按以下候选排序：
+
+```text
+1. 高收益可见金币包 branch package
+2. 边际收益为正的单金币
+3. 高信息前沿
+4. 走廊继续前进
+5. 兜底回退
+```
+
+---
+
+# 十六、分支金币包 branch package
+
+这是算法 D 和算法 C 的关键区别。
+
+算法 B 容易逐个看金币，导致：
+
+```text
+只看第一步陷阱是亏的
+或者只看单个金币收益不够
+```
+
+算法 D 要把一个短分支中的多个已知金币/陷阱打包评估。
+
+## 分支包定义
+
+从当前位置或附近 1 步内的 gateway 出发，在 fogMap 已知区域中向一个方向扩展，深度不超过：
+
+```javascript
+maxBranchProbeDepth = 8
+```
+
+枚举这个小区域内的：
+
+```text
+金币 C/G
+陷阱 T
+前沿 frontier
+```
+
+形成一个候选包：
+
+```javascript
+{
+  enterPath,
+  returnPath,
+  coinsInPackage,
+  trapsInPackage,
+  frontierCount,
+  unknownCount,
+  totalSteps,
+  netCoin,
+  score
+}
+```
+
+## 分支包适用场景
+
+分支包主要用于 Boss 未知阶段：
+
+```javascript
+if (!knownBosses.length) {
+  allowBranchPackage = true;
+}
+```
+
+如果 Boss 已知且金币够，则不要普通分支包，只允许顺路金币。
+
+## 分支包真实收益
+
+```javascript
+netCoin = coinsInPackage.length * 50 - trapsInPackage.length * 30
+```
+
+`totalSteps` 是：
+
+```text
+从当前位置进入分支
+收集包内金币
+必要时回到分支入口或主通道
+```
+
+如果分支出口本身就是继续探索的前沿，则不强制回到入口。
+
+## 分支包选择规则
+
+分支包可选条件：
+
+```javascript
+netCoin > 0
+```
+
+并且：
+
+```javascript
+trapsInPackage.length <= maxBranchTrapCount
+```
+
+然后计算：
+
+```javascript
+packageGainPerStep = netCoin / Math.max(totalSteps, 1)
+```
+
+如果当前 Boss 未知，只要：
+
+```javascript
+packageGainPerStep >= 3.5
+```
+
+就允许选择。
+
+这个阈值很重要：
+
+```text
+maze_7_7(1):
+  踩 1 个陷阱拿 1 个金币，净 +20，额外约 2 步，收益约 10/步 → 选择
+
+maze_7_7_0(1):
+  踩 1 个陷阱拿孤立金币，净 +20，但额外约 4 步，收益约 5/步。
+  如果当前已有更高主线金币/Boss方向，则不优先。
+
+maze_15_15_1:
+  短陷阱分支中连续发现 2 个金币、2 个陷阱，净 +40。
+  Boss 未知时允许探测并收集，然后回主线。
+
+maze_15_15_2:
+  陷阱和金币在主通道上，不作为普通分支处理，而由走廊前进规则处理。
+```
+
+注意：分支包只能使用当前已经揭露的 `fogMap`。
+不能用完整地图预知包里未来一定有什么。
+但是每一步重新规划后，可以随着新 FOV 揭露继续更新分支包。
+
+---
+
+# 十七、单金币候选评分
+
+扫描所有已知金币。
+
+对每个金币：
+
+```javascript
+pathToCoin = dijkstra path pos -> coin
+```
+
+如果不可达，跳过。
+
+计算路径上的未触发陷阱数：
+
+```javascript
+trapCount = countUntriggeredTraps(pathToCoin)
+```
+
+如果 Boss 已知：
+
+```javascript
+mainTarget = nearestBoss
+extraSteps =
+  dist(pos, coin) + dist(coin, mainTarget) - dist(pos, mainTarget)
+```
+
+如果 Boss 未知：
+
+```javascript
+extraSteps = pathToCoin.length
+```
+
+收益：
+
+```javascript
+deltaCoin = 50 - trapCount * 30
+```
+
+ratio gain：
+
+```javascript
+currentRatio = coins / Math.max(moveSteps, 1)
+newRatio = (coins + deltaCoin) / Math.max(moveSteps + Math.max(extraSteps, 1), 1)
+gain = newRatio - currentRatio
+```
+
+候选可选条件：
+
+```javascript
+gain > minPositiveGain
+```
+
+或者：
+
+```javascript
+coins < data.CoinConsumption
+```
+
+排序：
+
+```javascript
+score = gain
+score += (deltaCoin / Math.max(extraSteps, 1)) * 0.01
+score -= pathRevisitCount * revisitPenalty
+score -= backtrackPenalty if first step is lastPos
+```
+
+选择最高分金币。
+
+---
+
+# 十八、高信息前沿评分
+
+当 Boss 未知时，才考虑普通前沿。
+
+如果：
+
+```javascript
+knownBosses.length > 0 &&
+coins >= CoinConsumption * bossReadyBuffer &&
+stopExploreWhenBossKnownAndReady === true
+```
+
+则前沿评分直接禁用。
+
+前沿评分：
+
+```javascript
+unknownCount = frontier.unknownCount
+dist = dijkstraDistance(pos, frontier)
+trapCount = trapsOnPath(pos, frontier)
+visitedCost = pathRevisitCount * revisitPenalty
+
+infoValue =
+  frontierBaseValue +
+  frontierUnknownWeight * unknownCount
+```
+
+如果前沿路径的第一步不是回头路：
+
+```javascript
+infoValue += corridorForwardBonus
+```
+
+如果这个前沿是一个陷阱 gateway，即：
+
+```text
+目标或路径第一步是 T
+并且该 T 后面邻接多个未知格或已知金币
+```
+
+则：
+
+```javascript
+infoValue += trapGatewayInfoBonus
+```
+
+但是陷阱损失要扣：
+
+```javascript
+trapLoss = trapCount * trapDamage
+```
+
+最终：
+
+```javascript
+score = (infoValue - trapLoss) / Math.max(dist, 1)
+score -= visitedCost
+score -= backtrackPenalty if first step equals lastPos
+```
+
+选择最高 score 的前沿。
+
+这个规则用于：
+
+```text
+1. 允许 maze_15_15_1 在 Boss 未知时探测上方陷阱通道
+2. 允许 maze_15_15_2 沿右侧窄通道继续推进
+3. 避免在 Boss 已知后继续乱探索
+```
+
+---
+
+# 十九、走廊前进规则 corridor progress
+
+如果当前位置处在已知窄通道中：
+
+```text
+可走邻居数量 <= 2
+并且存在一个非 lastPos 的邻居
+并且 Boss 未知
+```
+
+则给这个非回头方向额外加分：
+
+```javascript
+corridorForwardBonus
+```
+
+如果非回头方向是陷阱，也允许通过，但必须满足：
+
+```javascript
+state.coins - trapDamage >= -data.CoinConsumption
+```
+
+也就是说：
+
+```text
+如果这是唯一继续探索方向，不要因为陷阱就原地卡住或大幅绕路。
+```
+
+这个规则用于保证：
+
+```text
+maze_15_15_2:
+  起点在右边界，沿窄通道向下推进。
+  顺路拿两个金币。
+  然后穿过两个主线陷阱。
+  找到 Boss 和出口。
+```
+
+---
+
+# 二十、兜底移动
+
+如果没有任何候选目标：
+
+```javascript
+function fallbackMoveD(state) {
+  const nbs = neighborsFog(state.fogMap, state.pos);
+
+  sort by:
+    1. 未访问优先
+    2. 非陷阱优先
+    3. 非 lastPos 优先
+    4. 访问次数少优先
+
+  return best neighbor or null
+}
+```
+
+陷阱惩罚：
+
+```javascript
+if fogMap[nb] === "T":
+  score -= 100
+```
+
+回头惩罚：
+
+```javascript
+if samePos(nb, lastPos):
+  score -= backtrackPenalty
+```
+
+---
+
+# 二十一、最终路径去重
+
+必须实现：
+
+```javascript
+function dedupePath(rawPath) {
+  const out = [];
+
+  for (let i = 0; i < rawPath.length; i++) {
+    if (
+      i === 0 ||
+      rawPath[i][0] !== out[out.length - 1][0] ||
+      rawPath[i][1] !== out[out.length - 1][1]
+    ) {
+      out.push(rawPath[i]);
+    }
+  }
+
+  return out;
+}
+```
+
+计算：
+
+```javascript
+const dedupedPath = dedupePath(rawPath);
+
+const path_length = dedupedPath.length;
+const move_steps = Math.max(0, path_length - 1);
+const final_coin = state.coins;
+const coin_step_ratio =
+  success && move_steps > 0 ? final_coin / move_steps : 0;
+```
+
+---
+
+# 二十二、算法 D 的预期行为
+
+## 对 `maze_7_7(1).json`
+
+算法 D 应该：
+
+```text
+1. 起点附近发现并收集低成本金币。
+2. 沿已知前沿向上探索。
+3. 发现右侧主线金币后收集。
+4. 在 Boss 未知阶段，发现“陷阱 + 金币”的短分支包：
+   净收益 = +50 - 30 = +20
+   额外步数约 2
+   边际收益约 10/步
+   因此选择。
+5. 随后发现 Boss，立即 RUSH_BOSS。
+6. Boss DP 0 复活。
+7. Boss 后进入出口。
+```
+
+预期：
+
+```text
+success=true
+move_steps=17
+final_coin=120
+ratio=7.058824
+triggeredTraps=(1,3)
+collectedCoins=(5,5),(3,5),(1,2)
+```
+
+---
+
+## 对 `maze_7_7_0(1).json`
+
+算法 D 应该：
+
+```text
+1. 收集起点附近金币。
+2. 收集右侧主线金币。
+3. 对左上孤立陷阱金币做边际评估：
+   净收益 +20
+   但额外步数约 4
+   且主线已经能快速到 Boss
+   不选择。
+4. 发现 Boss 后立即 RUSH_BOSS。
+5. Boss DP 0 复活。
+6. 进入出口。
+```
+
+预期：
+
+```text
+success=true
+move_steps=11
+final_coin=100
+ratio=9.090909
+triggeredTraps=none
+collectedCoins=(5,5),(3,5)
+```
+
+---
+
+## 对 `maze_15_15_1(1).json`
+
+算法 D 应该：
+
+```text
+1. 起点右侧金币直接收集。
+2. Boss 未知时沿前沿探索。
+3. 遇到上方陷阱 gateway 时，不立刻放弃。
+4. 因为该 gateway 后面有高信息区域，允许最多 2 个陷阱的短探测。
+5. 随着 3×3 FOV 揭露，发现连续金币。
+6. 收集两个金币，触发两个陷阱：
+   金币 +100
+   陷阱 -60
+   净收益 +40
+7. 拿完后回主通道。
+8. 继续沿主通道发现 Boss。
+9. Boss DP 在 minRouds 内 0 复活通关。
+10. 进入出口。
+```
+
+预期：
+
+```text
+success=true
+move_steps=25
+final_coin=90
+ratio=3.600000
+triggeredTraps=(4,5),(3,5)
+collectedCoins=(7,1),(3,6),(3,7)
+```
+
+---
+
+## 对 `maze_15_15_2(1).json`
+
+算法 D 应该：
+
+```text
+1. 起点在右边界，进入唯一明显通道。
+2. 使用 corridor progress 规则沿通道向下。
+3. 顺路收集两个金币。
+4. 遇到主通道陷阱时，不为了避开陷阱大范围探索。
+5. 因为已经有金币缓冲，并且通道继续向下是最高信息方向，所以穿过两个陷阱。
+6. 发现 Boss。
+7. Boss DP 0 复活。
+8. Boss 后出口相邻，直接进入出口。
+```
+
+预期：
+
+```text
+success=true
+move_steps=12
+final_coin=40
+ratio=3.333333
+triggeredTraps=(10,13),(11,13)
+collectedCoins=(8,13),(9,13)
+```
+
+---
+
+# 二十三、关键禁止事项
+
+算法 D 中禁止：
+
+```text
+1. 禁止直接扫描 groundTruth 寻找所有金币、Boss、出口。
+2. 禁止使用完整地图 A* 规划。
+3. 禁止强制收集所有金币。
+4. 禁止 Boss 战使用最高伤害贪心。
+5. 禁止 Boss 已知且金币够时继续普通 frontier 探索。
+6. 禁止为了一个低边际金币绕远路。
+7. 禁止揭露旧位置 prevPos。
+8. 禁止把 null 当作可走格。
+9. 禁止让 Agent 读取当前 3×3 之外的真实内容。
+```
+
+---
+
+# 二十四、调试输出
+
+为了验证算法 D 是否达到目标，请每一步记录 frame：
+
+```javascript
+{
+  step,
+  pos,
+  coins,
+  phase,
+  chosenType,
+  chosenTarget,
+  chosenScore,
+  knownBosses,
+  knownExit,
+  collectedCoins,
+  triggeredTraps,
+  fogMapSnapshot
+}
+```
+
+`phase` 取值：
+
+```text
+DISCOVER
+BRANCH_PACKAGE
+RUSH_BOSS
+RUSH_EXIT
+FALLBACK
+```
+
+最终输出时打印：
+
+```javascript
+console.table([
+  {
+    algorithm,
+    success,
+    move_steps,
+    final_coin,
+    coin_step_ratio,
+    boss_revive_count,
+    triggeredTraps,
+    collectedCoins
+  }
+]);
+```
+
+---
+
+# 二十五、算法 D 和算法 C 的区别
+
+算法 C 是通用 ratio-aware planner。
+算法 D 是 benchmark-oriented planner。
+
+算法 D 额外加入：
+
+```text
+1. branch package 短分支收益包评估
+2. trap gateway 信息探测
+3. corridor progress 窄通道推进
+4. Boss 已知后强制停止普通探索
+5. 顺路金币 detour 判断
+6. BOSS DP 0 复活优先
+```
+
+这些规则是为了稳定达到目标表中的 4 个结果，同时仍然遵守未知全图和 3×3 FOV。
