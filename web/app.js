@@ -1202,90 +1202,43 @@ function simulateFogOriginal(data) {
 // Fixed runBossBattle: minRounds = GLOBAL budget to defeat ALL bosses per attempt
 // CoinConsumption = VALUE penalty per revival (not literal coin count)
 // "coins" in code = total_value accumulator (picked×50 - traps×30 - revivals×CoinConsumption)
-function runBossBattle(bossHpList, rawSkills, minRounds, coinConsumption, startingValue) {
-    var totalValue = startingValue;   // accumulated value (not coin count)
+function runBossBattle(bossHpList, rawSkills, minRounds, coinConsumption, startingCoins) {
+    var coins = startingCoins;
     var skills = rawSkills.map(function (pair) {
       return { damage: pair[0], cooldown: pair[1], remainingCd: 0 };
     });
-    var totalTurns = 0;
-    var reviveCount = 0;
-    var coinCost = 0;
-    var skillSequenceLengths = [];
-    var skillSequences = [];
-
-    // Boss HP knowledge: agent doesn't know the full list initially.
-    // After each failed attempt, agent learns HPs of bosses actually encountered.
-    // We simulate this by tracking which bossIndex was reached.
-    var knownBossCount = 1;  // initially only know 1st boss exists (but not its HP)
-
-    while (totalValue >= 0) {
-        // Fresh attempt: fight all known bosses within minRounds
+    var totalTurns = 0, reviveCount = 0, coinCost = 0;
+    var skillSequenceLengths = [], skillSequences = [];
+    for (var b = 0; b < bossHpList.length; b++) {
+      var bossHp = bossHpList[b];
+      while (bossHp > 0 && coins >= 0) {
         var seq = [];
-        var bi = 0;
-        var curHp = bossHpList[0];  // simulator knows HP; agent doesn't, but simulator resolves combat
-        for (var si = 0; si < skills.length; si++) skills[si].remainingCd = 0;
-        var bossIndexReached = 0;
-
-        for (var turn = 0; turn < minRounds; turn++) {
-            // Greedy: pick highest-damage available skill
-            var bestIdx = -1, bestDamage = -1;
-            for (var si = 0; si < skills.length; si++) {
-                if (skills[si].remainingCd === 0 && skills[si].damage > bestDamage) {
-                    bestDamage = skills[si].damage;
-                    bestIdx = si;
-                }
+        for (var attackRound = 1; attackRound <= minRounds; attackRound++) {
+          var bestIdx = -1, bestDamage = -1;
+          for (var si = 0; si < skills.length; si++) {
+            if (skills[si].remainingCd === 0 && skills[si].damage > bestDamage) {
+              bestDamage = skills[si].damage; bestIdx = si;
             }
-            if (bestIdx >= 0) {
-                curHp -= skills[bestIdx].damage;
-                seq.push(bestIdx);
-                skills[bestIdx].remainingCd = skills[bestIdx].cooldown;
-            } else {
-                seq.push(-1);
-            }
-            // Tick all cooldowns down
-            for (var si2 = 0; si2 < skills.length; si2++) {
-                if (skills[si2].remainingCd > 0) skills[si2].remainingCd -= 1;
-            }
-            if (curHp <= 0) {
-                bi++;
-                bossIndexReached = bi;  // agent learns: there's a boss at index bi
-                if (bi >= bossHpList.length) {
-                    // All bosses defeated
-                    totalTurns += seq.length;
-                    skillSequenceLengths.push(seq.length);
-                    skillSequences.push(seq);
-                    return {
-                        won: true, coinsAfter: totalValue,
-                        totalTurns: totalTurns, reviveCount: reviveCount, coinCost: coinCost,
-                        skillSequenceLengths: skillSequenceLengths, skillSequences: skillSequences
-                    };
-                }
-                curHp = bossHpList[bi];
-            }
+          }
+          if (bestIdx >= 0) {
+            bossHp -= skills[bestIdx].damage; seq.push(bestIdx);
+            skills[bestIdx].remainingCd = skills[bestIdx].cooldown;
+          }
+          for (var si2 = 0; si2 < skills.length; si2++) {
+            if (skills[si2].remainingCd > 0) skills[si2].remainingCd -= 1;
+          }
+          if (bossHp <= 0) break;
         }
-
-        // Failed this attempt — penalize and retry
-        totalTurns += seq.length;
-        skillSequenceLengths.push(seq.length);
-        skillSequences.push(seq);
-        reviveCount += 1;
-        coinCost += coinConsumption;          // CoinConsumption = VALUE penalty (not coins)
-        totalValue -= coinConsumption;        // subtract from total_value
-        knownBossCount = Math.max(bossIndexReached + 1, knownBossCount);  // learn from failure
-
-        if (totalValue < 0) {
-            return {
-                won: false, coinsAfter: Math.max(0, totalValue + coinConsumption),
-                totalTurns: totalTurns, reviveCount: reviveCount, coinCost: coinCost - coinConsumption,
-                skillSequenceLengths: skillSequenceLengths, skillSequences: skillSequences
-            };
+        totalTurns += seq.length; skillSequenceLengths.push(seq.length); skillSequences.push(seq);
+        if (bossHp > 0) {
+          reviveCount += 1; coinCost += coinConsumption; coins -= coinConsumption;
+          if (coins < 0) return { won: false, coinsAfter: Math.max(0, coins + coinConsumption), totalTurns: totalTurns, reviveCount: reviveCount, coinCost: coinCost, skillSequenceLengths: skillSequenceLengths, skillSequences: skillSequences };
+          for (var si3 = 0; si3 < skills.length; si3++) skills[si3].remainingCd = 0;
         }
+      }
     }
-    return { won: false, coinsAfter: 0, totalTurns: totalTurns, reviveCount: reviveCount, coinCost: coinCost, skillSequenceLengths: skillSequenceLengths, skillSequences: skillSequences };
-}
-
-
-  // ============================================================
+    return { won: true, coinsAfter: coins, totalTurns: totalTurns, reviveCount: reviveCount, coinCost: coinCost, skillSequenceLengths: skillSequenceLengths, skillSequences: skillSequences };
+  }  // ============================================================
   // Algorithm A: simulateLocalGreedy
   // Port of agents/local_greedy_policy.py — LocalGreedyAgent
   //
