@@ -644,14 +644,43 @@
 
     notes.set(keyOf(start), "Starting exploration from entrance");
 
+    // Track cumulative ratio to filter low-value coins
+    let curCoins = 0;
+    let curSteps = 0;
+
     while (current && coins.length) {
       const pick = bestNextTarget(grid, current, coins);
       if (!pick) break;
+
+      // Ratio filter: compare "collect this coin → then to exit" vs "stop now → to exit"
+      const pathLen = pick.path.length - 1; // steps to reach coin
+      const trapCount = pick.path.reduce(function (sum, pos) { return sum + (grid[pos.r][pos.c] === "T" ? 1 : 0); }, 0);
+      const netValue = 50 - trapCount * TRAP_DAMAGE;
+
+      // Baseline: final ratio if I stop right now and head straight to exit
+      const exitPath = findPath(grid, current, exit, { avoidTraps: false, avoidBoss: true });
+      const exitSteps = exitPath ? exitPath.length - 1 : 0;
+      const baselineRatio = (curCoins) / Math.max(curSteps + exitSteps, 1);
+
+      // With this coin: collect it, then head to exit
+      var coinToExitPath = findPath(grid, pick.target, exit, { avoidTraps: false, avoidBoss: true });
+      var coinExitSteps = coinToExitPath ? coinToExitPath.length - 1 : 0;
+      var totalStepsWithCoin = curSteps + pathLen + coinExitSteps;
+      var coinRatio = (curCoins + netValue) / Math.max(totalStepsWithCoin, 1);
+
+      if (coinRatio < baselineRatio) {
+        // This coin hurts the final ratio — skip it
+        coins = coins.filter(function (coin) { return coin.r !== pick.target.r || coin.c !== pick.target.c; });
+        continue;
+      }
+
       appendPath(route, pick.path);
       notes.set(keyOf(pick.target), "Plan to collect coin");
       grid[pick.target.r][pick.target.c] = " ";
       current = pick.target;
-      coins = coins.filter((coin) => coin.r !== pick.target.r || coin.c !== pick.target.c);
+      curCoins += netValue;
+      curSteps += pathLen;
+      coins = coins.filter(function (coin) { return coin.r !== pick.target.r || coin.c !== pick.target.c; });
     }
 
     let bosses = findCells(grid, ["B"]);
@@ -727,7 +756,7 @@
         event = `Trap triggered, coins -${TRAP_DAMAGE}`;
         phase = "Risk Handling";
       } else if (index > 0 && currentCell === "B") {
-        bossCount += 1;
+        bossCount = Array.isArray(data.B) ? data.B.length : 1;
         mutable[pos.r][pos.c] = " ";
         event = "Boss defeated, path opened";
         phase = "Boss Combat";
@@ -759,6 +788,295 @@
 
     return { frames, route };
   }
+// ============================================================
+// simulateFogOriginal — Fog-constrained Original (main algorithm)
+// Same A* planing logic as buildPlannedRoute, but using fogMap only.
+// Reveals 3×3 per step, uses dijkstraFog for fogMap-aware pathfinding.
+// ============================================================
+function simulateFogOriginal(data) {
+  var rows = data.maze.length;
+  var cols = data.maze[0].length;
+  var groundTruth = cloneGrid(data.maze);
+  var fogMap = initFogMap(rows, cols);
+  var viewRadius = 1;
+
+  // Find start
+  var pos = null;
+  for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) if (groundTruth[r][c] === "S") pos = { r: r, c: c };
+  if (!pos) return emptyResultD();
+
+  var coins = 0;
+  var rawPath = [[pos.r, pos.c]];
+  var moveSteps = 0;
+  var stuckCount = 0;
+  var triggeredTraps = new Set();
+  var bossCleared = false;
+  var bossHpList = Array.isArray(data.B) ? data.B.slice() : [];
+  var allBossesDefeated = bossHpList.length === 0;
+  var reachedExit = false;
+  var visited = {};
+  var lastPos = null;
+  var recentKeys = {};
+  var recentList = [];
+
+  // Boss stats
+  var bossTotalTurns = 0, bossReviveCount = 0, bossCoinCost = 0;
+  var bossSkillSeqLens = [], bossSkillSeqs = [];
+
+  // Initial reveal at start
+  revealFog(fogMap, groundTruth, pos, viewRadius);
+  visited[pos.r + "," + pos.c] = 1;
+
+  for (var step = 0; step < COMPARE_MAX_STEPS; step++) {
+    // 1. Reveal at current position
+    revealFog(fogMap, groundTruth, pos, viewRadius);
+
+    // 2. Handle current cell effects
+    var currentCell = groundTruth[pos.r][pos.c];
+    var pkey = pos.r + "," + pos.c;
+
+    if (step > 0) {
+      if (currentCell === "C" || currentCell === "G") {
+        coins += COIN_VALUE;
+        groundTruth[pos.r][pos.c] = " ";
+        fogMap[pos.r][pos.c] = " ";
+      } else if (currentCell === "T" && !triggeredTraps.has(pkey)) {
+        coins -= TRAP_DAMAGE;
+        triggeredTraps.add(pkey);
+        groundTruth[pos.r][pos.c] = " ";
+        fogMap[pos.r][pos.c] = " ";
+      } else if (currentCell === "B" && bossHpList.length > 0 && !bossCleared) {
+        var br = runBossBattle(
+          bossHpList.slice(),
+          data.PlayerSkills || [[8,4],[2,0],[4,2],[6,3]],
+          data.minRouds || 20,
+          data.CoinConsumption || 5,
+          coins
+        );
+        coins = br.coinsAfter;
+        bossTotalTurns = br.totalTurns || 0;
+        bossReviveCount = br.reviveCount || 0;
+        bossCoinCost = br.coinCost || 0;
+        if (br.skillSequenceLengths) bossSkillSeqLens = bossSkillSeqLens.concat(br.skillSequenceLengths);
+        if (br.skillSequences) bossSkillSeqs = bossSkillSeqs.concat(br.skillSequences);
+        if (br.won) { bossCleared = true; allBossesDefeated = true; bossHpList.length = 0; }
+        else { break; }
+        groundTruth[pos.r][pos.c] = " ";
+        fogMap[pos.r][pos.c] = " ";
+      } else if (currentCell === "E" && allBossesDefeated) {
+        reachedExit = true;
+        break;
+      }
+    }
+
+    if (currentCell === "E" && allBossesDefeated) break;
+
+    // 3. Scan fogMap for visible targets
+    var visibleCoins = [];
+    var visibleBosses = [];
+    var exitPos = null;
+    for (var sr = 0; sr < rows; sr++) {
+      for (var sc = 0; sc < cols; sc++) {
+        var fc = fogMap[sr][sc];
+        if (fc === null) continue;
+        if (fc === "C" || fc === "G") visibleCoins.push({ r: sr, c: sc, cell: fc });
+        if (fc === "B") visibleBosses.push({ r: sr, c: sc, cell: fc });
+        if (fc === "E") exitPos = { r: sr, c: sc };
+      }
+    }
+
+    // 4. Plan next move
+    var targetPath = null;
+
+    // Priority: Exit (if boss cleared)
+    if (allBossesDefeated && exitPos) {
+      var dijE = dijkstraFog(fogMap, pos, triggeredTraps, 31);
+      targetPath = extractPathFog(dijE.prev, pos, exitPos);
+    }
+
+    // Priority: Boss (if visible)
+    if (!targetPath && visibleBosses.length > 0 && !bossCleared) {
+      var bestB = null, bestBDist = Infinity, bestBPath = null;
+      for (var bi = 0; bi < visibleBosses.length; bi++) {
+        var dijB = dijkstraFog(fogMap, pos, triggeredTraps, 31);
+        var bKey = visibleBosses[bi].r + "," + visibleBosses[bi].c;
+        if (bKey in dijB.dist && dijB.dist[bKey] < bestBDist) {
+          bestBDist = dijB.dist[bKey];
+          bestB = visibleBosses[bi];
+          bestBPath = extractPathFog(dijB.prev, pos, bestB);
+        }
+      }
+      targetPath = bestBPath;
+    }
+
+    // Priority: Coins (with ratio filter)
+    if (!targetPath && visibleCoins.length > 0) {
+      var dijC = dijkstraFog(fogMap, pos, triggeredTraps, 31);
+      var bestCoinPath = null;
+      var bestCoinScore = -Infinity;
+
+      // Estimate "stop now and go to exit" baseline
+      var baselineRatio = 0;
+      var exitKnown = false;
+      if (exitPos) {
+        var dijExit = dijkstraFog(fogMap, pos, triggeredTraps, 31);
+        var ek = exitPos.r + "," + exitPos.c;
+        var exitDist = (ek in dijExit.dist) ? dijExit.dist[ek] : Infinity;
+        baselineRatio = coins / Math.max(moveSteps + exitDist, 1);
+        exitKnown = true;
+      }
+
+      for (var ci = 0; ci < visibleCoins.length; ci++) {
+        var coinT = visibleCoins[ci];
+        var ck = coinT.r + "," + coinT.c;
+        if (!(ck in dijC.dist)) continue;
+        var coinPath = extractPathFog(dijC.prev, pos, coinT);
+        if (!coinPath || coinPath.length < 2) continue;
+
+        var distToCoin = coinPath.length - 1;
+        var trapCount = 0;
+        for (var ti = 0; ti < coinPath.length; ti++) {
+          var tp = coinPath[ti];
+          if (fogMap[tp.r][tp.c] === "T" && !triggeredTraps.has(tp.r + "," + tp.c)) trapCount++;
+        }
+        var netValue = COIN_VALUE - trapCount * TRAP_DAMAGE;
+
+        // Pre-filter: never take a coin that loses money
+        if (netValue <= 0) continue;
+        // When exit unknown: require minimum per-step gain
+        var gainPerStep = netValue / Math.max(distToCoin, 1);
+        if (!exitKnown && gainPerStep < 5.0) continue;
+
+        // Coin ratio: collect coin, then to exit
+        var coinRatio = 0;
+        if (exitPos) {
+          var dijFromCoin = dijkstraFog(fogMap, coinT, triggeredTraps, 31);
+          var ek2 = exitPos.r + "," + exitPos.c;
+          var coinExitDist = (ek2 in dijFromCoin.dist) ? dijFromCoin.dist[ek2] : Infinity;
+          coinRatio = (coins + netValue) / Math.max(moveSteps + distToCoin + coinExitDist, 1);
+        } else {
+          coinRatio = gainPerStep; // use per-step gain as score when exit unknown
+        }
+
+        // Pick the coin with the best coinRatio (greedy pick)
+        if (coinRatio > bestCoinScore) {
+          bestCoinScore = coinRatio;
+          bestCoinPath = coinPath;
+        }
+      }
+
+      // Only take the coin if it beats stopping now
+      if (bestCoinPath && bestCoinScore > baselineRatio) {
+        targetPath = bestCoinPath;
+      }
+    }
+
+    // Priority: Frontiers (explore unknown areas)
+    if (!targetPath) {
+      var frontiers = [];
+      var dirs4 = [[-1,0],[1,0],[0,-1],[0,1]];
+      for (var fr = 0; fr < rows; fr++) {
+        for (var fc2 = 0; fc2 < cols; fc2++) {
+          if (!isWalkableFog(fogMap[fr][fc2])) continue;
+          var unk = 0;
+          for (var d = 0; d < dirs4.length; d++) {
+            var fnr = fr + dirs4[d][0], fnc = fc2 + dirs4[d][1];
+            if (fnr >= 0 && fnc >= 0 && fnr < rows && fnc < cols && fogMap[fnr][fnc] === null) unk++;
+          }
+          if (unk > 0) frontiers.push({ r: fr, c: fc2, unk: unk });
+        }
+      }
+
+      if (frontiers.length > 0) {
+        var fdDij = dijkstraFog(fogMap, pos, triggeredTraps, 31);
+        var bestF = null, bestFScore = -Infinity, bestFPath = null;
+        for (var fi = 0; fi < frontiers.length; fi++) {
+          var fk2 = frontiers[fi].r + "," + frontiers[fi].c;
+          if (!(fk2 in fdDij.dist)) continue;
+          var fPath = extractPathFog(fdDij.prev, pos, frontiers[fi]);
+          if (!fPath || fPath.length < 2) continue;
+          var fScore = (frontiers[fi].unk * 4 + 8) / Math.max(fPath.length - 1, 1);
+          var firstStep = fPath[1];
+          if (lastPos && firstStep.r === lastPos.r && firstStep.c === lastPos.c) fScore -= 5;
+          if (fScore > bestFScore) { bestFScore = fScore; bestFPath = fPath; }
+        }
+        targetPath = bestFPath;
+      }
+    }
+
+    // Priority: Fallback — least-visited neighbor
+    if (!targetPath) {
+      var nbrs = neighborsFog(fogMap, pos);
+      var bestFb = null, bestFbScore = -Infinity;
+      for (var ni = 0; ni < nbrs.length; ni++) {
+        var nb = nbrs[ni];
+        var nk = nb.r + "," + nb.c;
+        var fbScore = -(visited[nk] || 0) * 2;
+        if (fogMap[nb.r][nb.c] === "T" && !triggeredTraps.has(nk)) fbScore -= 100;
+        if (lastPos && nb.r === lastPos.r && nb.c === lastPos.c) fbScore -= 3;
+        if (nk in recentKeys) fbScore -= 5;
+        if (fbScore > bestFbScore && groundTruth[nb.r][nb.c] !== "#") {
+          bestFbScore = fbScore;
+          bestFb = nb;
+        }
+      }
+      if (bestFb) targetPath = [pos, bestFb];
+    }
+
+    // 5. Execute move
+    if (!targetPath || targetPath.length < 2) {
+      stuckCount++;
+      rawPath.push([pos.r, pos.c]);
+      if (stuckCount >= 30) break;
+      continue;
+    }
+
+    var nextPos = targetPath[1];
+    if (nextPos.r < 0 || nextPos.r >= rows || nextPos.c < 0 || nextPos.c >= cols
+        || groundTruth[nextPos.r][nextPos.c] === "#") {
+      stuckCount++;
+      rawPath.push([pos.r, pos.c]);
+      if (stuckCount >= 30) break;
+      continue;
+    }
+
+    var newKey = nextPos.r + "," + nextPos.c;
+    if (newKey in recentKeys) { stuckCount += 2; } else {
+      stuckCount = Math.max(0, stuckCount - 1);
+    }
+
+    lastPos = { r: pos.r, c: pos.c };
+    pos = nextPos;
+    rawPath.push([pos.r, pos.c]);
+    moveSteps++;
+    visited[pos.r + "," + pos.c] = (visited[pos.r + "," + pos.c] || 0) + 1;
+    recentKeys[newKey] = 1;
+    recentList.push(newKey);
+    if (recentList.length > 8) { delete recentKeys[recentList.shift()]; }
+  }
+
+  // Deduplicate path
+  var deduped = [];
+  for (var dp = 0; dp < rawPath.length; dp++) {
+    if (dp === 0 || rawPath[dp][0] !== deduped[deduped.length - 1][0] || rawPath[dp][1] !== deduped[deduped.length - 1][1]) {
+      deduped.push(rawPath[dp]);
+    }
+  }
+
+  var finalSteps = Math.max(0, deduped.length - 1);
+  var ratio = (reachedExit && allBossesDefeated && finalSteps > 0) ? coins / finalSteps : 0;
+
+  return {
+    success: reachedExit && allBossesDefeated,
+    path: deduped, path_length: deduped.length, move_steps: finalSteps,
+    final_coin: coins, coin_step_ratio: ratio,
+    boss_success: allBossesDefeated, boss_total_turns: bossTotalTurns,
+    boss_revive_count: bossReviveCount, boss_coin_cost: bossCoinCost,
+    boss_skill_sequence_lengths: bossSkillSeqLens, boss_skill_sequences: bossSkillSeqs,
+    collectedCoins: [], triggeredTraps: [],
+    algorithm: "FOG_ORIGINAL"
+  };
+}
   // ============================================================
   // Shared FOG simulation utilities
   // ============================================================
@@ -881,83 +1199,91 @@
   // Boss battle simulation (port of boss.js buildFrames combat logic)
   // Deterministic, no animation — returns { won, coinsAfter }
   // ============================================================
-  function runBossBattle(bossHpList, rawSkills, minRounds, coinConsumption, startingCoins) {
-    var coins = startingCoins;
+// Fixed runBossBattle: minRounds = GLOBAL budget to defeat ALL bosses per attempt
+// CoinConsumption = VALUE penalty per revival (not literal coin count)
+// "coins" in code = total_value accumulator (picked×50 - traps×30 - revivals×CoinConsumption)
+function runBossBattle(bossHpList, rawSkills, minRounds, coinConsumption, startingValue) {
+    var totalValue = startingValue;   // accumulated value (not coin count)
     var skills = rawSkills.map(function (pair) {
       return { damage: pair[0], cooldown: pair[1], remainingCd: 0 };
     });
-
-    // ── Detailed tracking for output_result.json ──
     var totalTurns = 0;
     var reviveCount = 0;
     var coinCost = 0;
     var skillSequenceLengths = [];
     var skillSequences = [];
 
-    for (var b = 0; b < bossHpList.length; b++) {
-      var bossHp = bossHpList[b];
+    // Boss HP knowledge: agent doesn't know the full list initially.
+    // After each failed attempt, agent learns HPs of bosses actually encountered.
+    // We simulate this by tracking which bossIndex was reached.
+    var knownBossCount = 1;  // initially only know 1st boss exists (but not its HP)
 
-      while (bossHp > 0 && coins >= 0) {
+    while (totalValue >= 0) {
+        // Fresh attempt: fight all known bosses within minRounds
         var seq = [];
-        var hpBeforeAttempt = bossHp;
+        var bi = 0;
+        var curHp = bossHpList[0];  // simulator knows HP; agent doesn't, but simulator resolves combat
+        for (var si = 0; si < skills.length; si++) skills[si].remainingCd = 0;
+        var bossIndexReached = 0;
 
-        // One attempt: up to minRounds rounds
-        for (var attackRound = 1; attackRound <= minRounds; attackRound++) {
-          // Greedy: pick highest-damage available skill
-          var bestIdx = null;
-          var bestDamage = -1;
-          for (var si = 0; si < skills.length; si++) {
-            if (skills[si].remainingCd === 0 && skills[si].damage > bestDamage) {
-              bestDamage = skills[si].damage;
-              bestIdx = si;
+        for (var turn = 0; turn < minRounds; turn++) {
+            // Greedy: pick highest-damage available skill
+            var bestIdx = -1, bestDamage = -1;
+            for (var si = 0; si < skills.length; si++) {
+                if (skills[si].remainingCd === 0 && skills[si].damage > bestDamage) {
+                    bestDamage = skills[si].damage;
+                    bestIdx = si;
+                }
             }
-          }
-
-          if (bestIdx !== null) {
-            bossHp -= skills[bestIdx].damage;
-            seq.push(bestIdx);
-            skills[bestIdx].remainingCd = skills[bestIdx].cooldown;
-          }
-
-          // Tick cooldowns
-          for (var si2 = 0; si2 < skills.length; si2++) {
-            if (skills[si2].remainingCd > 0) skills[si2].remainingCd -= 1;
-          }
-
-          if (bossHp <= 0) break;
+            if (bestIdx >= 0) {
+                curHp -= skills[bestIdx].damage;
+                seq.push(bestIdx);
+                skills[bestIdx].remainingCd = skills[bestIdx].cooldown;
+            } else {
+                seq.push(-1);
+            }
+            // Tick all cooldowns down
+            for (var si2 = 0; si2 < skills.length; si2++) {
+                if (skills[si2].remainingCd > 0) skills[si2].remainingCd -= 1;
+            }
+            if (curHp <= 0) {
+                bi++;
+                bossIndexReached = bi;  // agent learns: there's a boss at index bi
+                if (bi >= bossHpList.length) {
+                    // All bosses defeated
+                    totalTurns += seq.length;
+                    skillSequenceLengths.push(seq.length);
+                    skillSequences.push(seq);
+                    return {
+                        won: true, coinsAfter: totalValue,
+                        totalTurns: totalTurns, reviveCount: reviveCount, coinCost: coinCost,
+                        skillSequenceLengths: skillSequenceLengths, skillSequences: skillSequences
+                    };
+                }
+                curHp = bossHpList[bi];
+            }
         }
 
+        // Failed this attempt — penalize and retry
         totalTurns += seq.length;
         skillSequenceLengths.push(seq.length);
         skillSequences.push(seq);
+        reviveCount += 1;
+        coinCost += coinConsumption;          // CoinConsumption = VALUE penalty (not coins)
+        totalValue -= coinConsumption;        // subtract from total_value
+        knownBossCount = Math.max(bossIndexReached + 1, knownBossCount);  // learn from failure
 
-        if (bossHp > 0) {
-          // Ran out of minRounds — deduct coins and retry
-          reviveCount += 1;
-          coinCost += coinConsumption;
-          coins -= coinConsumption;
-          if (coins < 0) {
-            var coinsBeforePenalty = coins + coinConsumption;
+        if (totalValue < 0) {
             return {
-              won: false, coinsAfter: Math.max(0, coinsBeforePenalty),
-              totalTurns: totalTurns, reviveCount: reviveCount, coinCost: coinCost,
-              skillSequenceLengths: skillSequenceLengths, skillSequences: skillSequences
+                won: false, coinsAfter: Math.max(0, totalValue + coinConsumption),
+                totalTurns: totalTurns, reviveCount: reviveCount, coinCost: coinCost - coinConsumption,
+                skillSequenceLengths: skillSequenceLengths, skillSequences: skillSequences
             };
-          }
-          // Reset skills for retry
-          for (var si3 = 0; si3 < skills.length; si3++) {
-            skills[si3].remainingCd = 0;
-          }
         }
-      }
     }
+    return { won: false, coinsAfter: 0, totalTurns: totalTurns, reviveCount: reviveCount, coinCost: coinCost, skillSequenceLengths: skillSequenceLengths, skillSequences: skillSequences };
+}
 
-    return {
-      won: true, coinsAfter: coins,
-      totalTurns: totalTurns, reviveCount: reviveCount, coinCost: coinCost,
-      skillSequenceLengths: skillSequenceLengths, skillSequences: skillSequences
-    };
-  }
 
   // ============================================================
   // Algorithm A: simulateLocalGreedy
@@ -1066,7 +1392,7 @@
     return null;  // Both intermediate cells are walls
   }
 
-  function simulateLocalGreedy(data) {
+function simulateLocalGreedy(data) {
     var rows = data.maze.length;
     var cols = data.maze[0].length;
     var groundTruth = cloneGrid(data.maze);
@@ -1087,13 +1413,14 @@
     var reachedExit = false;
     var stuckCount = 0;
     var cfg = ALGO_A_CONFIG;
-    // Boss battle stats aggregation (for output_result.json)
     var bossTotalTurns = 0;
     var bossReviveCount = 0;
     var bossCoinCost = 0;
     var bossSkillSequenceLengths = [];
     var bossSkillSequences = [];
 
+    // Initial reveal at start position (matching Python LocalSimulator.__init__)
+    revealFog(fogMap, groundTruth, pos, viewRadius);
     visited.add(keyOf(pos));
 
     for (var step = 0; step < COMPARE_MAX_STEPS; step++) {
@@ -1102,7 +1429,6 @@
       var phase = "Exploring";
       var bossEncounter = null;
 
-      // Record frame (fog state BEFORE scoring this step)
       var revealedSet2 = getRevealedSet(fogMap);
       frames.push({
         round: step, pos: { r: pos.r, c: pos.c }, coins: coins,
@@ -1113,50 +1439,44 @@
         heat: [], exploredRatio: revealedSet2.size / (rows * cols),
       });
 
-      // Handle current cell (coin / trap / boss / exit)
       if (step > 0) {
         if (currentCell === "C" || currentCell === "G") {
           coins += COIN_VALUE;
           groundTruth[pos.r][pos.c] = " ";
           fogMap[pos.r][pos.c] = " ";
-          event = "Collected coin, coins +" + COIN_VALUE;
-          phase = "Resource Collect";
+          event = "Pickup coin +" + COIN_VALUE;
+          phase = "Resource";
         } else if (currentCell === "T" && !triggeredTraps.has(keyOf(pos))) {
           coins -= TRAP_DAMAGE;
           triggeredTraps.add(keyOf(pos));
           groundTruth[pos.r][pos.c] = " ";
           fogMap[pos.r][pos.c] = " ";
-          event = "Trap triggered, coins -" + TRAP_DAMAGE;
-          phase = "Risk Handling";
+          event = "Trap -" + TRAP_DAMAGE;
+          phase = "Risk";
         } else if (currentCell === "B" && bossHpList.length > 0) {
-          var bossHp = bossHpList.shift();
           var battleResult = runBossBattle(
-            [bossHp],
+            bossHpList.slice(),
             data.PlayerSkills || [[8, 4], [2, 0], [4, 2], [6, 3]],
             data.minRouds || 20,
             data.CoinConsumption || 5,
             coins
           );
           coins = battleResult.coinsAfter;
-          // Aggregate boss stats for output_result.json
           bossTotalTurns += battleResult.totalTurns || 0;
           bossReviveCount += battleResult.reviveCount || 0;
           bossCoinCost += battleResult.coinCost || 0;
-          if (battleResult.skillSequenceLengths) {
-            bossSkillSequenceLengths = bossSkillSequenceLengths.concat(battleResult.skillSequenceLengths);
-          }
-          if (battleResult.skillSequences) {
-            bossSkillSequences = bossSkillSequences.concat(battleResult.skillSequences);
-          }
+          if (battleResult.skillSequenceLengths) bossSkillSequenceLengths = bossSkillSequenceLengths.concat(battleResult.skillSequenceLengths);
+          if (battleResult.skillSequences) bossSkillSequences = bossSkillSequences.concat(battleResult.skillSequences);
           if (battleResult.won) {
-            bossDefeated += 1;
+            bossDefeated += (Array.isArray(data.B) ? data.B.length : 1);
             bossEncounter = { bossIndex: bossDefeated, bossTotal: (Array.isArray(data.B) ? data.B.length : 0) };
-            event = "Boss " + bossDefeated + " defeated";
-            phase = "Boss Combat";
-            if (bossHpList.length === 0) allBossesDefeated = true;
+            bossHpList.length = 0;
+            allBossesDefeated = true;
+            event = "Boss defeated";
+            phase = "Boss";
           } else {
-            event = "Boss combat failed, coins remaining " + coins;
-            phase = "Boss Combat";
+            event = "Boss failed, coins " + coins;
+            phase = "Boss";
           }
           groundTruth[pos.r][pos.c] = " ";
           fogMap[pos.r][pos.c] = " ";
@@ -1166,110 +1486,67 @@
           frames[frames.length - 1].phase = "Complete";
           break;
         }
-        // Update the frame we just recorded with the event/phase from cell handling
         if (event) frames[frames.length - 1].event = event;
         if (phase !== "Exploring") frames[frames.length - 1].phase = phase;
         if (bossEncounter) frames[frames.length - 1].bossEncounter = bossEncounter;
-        // Also update coins and bossCount on the frame after cell handling
         frames[frames.length - 1].coins = coins;
         frames[frames.length - 1].bossCount = bossDefeated;
-        // Update grid to reflect cell changes
         frames[frames.length - 1].grid = cloneGrid(groundTruth);
       }
 
-      // Check exit
       if (currentCell === "E" && allBossesDefeated) break;
 
-      // Score 3x3 and decide next move (BEFORE revealing — so unexplored cells
-      // at the edge of the fog still get explore_bonus)
+      // ── Agent decides (Python LocalGreedyAgent.decide()) ──
       var candidates = score3x3(pos.r, pos.c, fogMap, triggeredTraps, visited, prevPos, cfg);
       candidates.sort(function (a, b) { return b[1] - a[1]; });
 
-      var moved = false;
-      var usedFallback = false;
-      // Phase 1: try positive-score candidates (explore / collect)
+      var nextPos = null;
       for (var ci = 0; ci < candidates.length; ci++) {
-        var target = candidates[ci][0];
-        var candidateScore = candidates[ci][1];
-        if (candidateScore <= 0) break;
-        var first = firstStepA(pos.r, pos.c, target, fogMap);
-        if (first && first.r >= 0 && first.r < rows && first.c >= 0 && first.c < cols
-            && groundTruth[first.r][first.c] !== "#") {
-          prevPos = { r: pos.r, c: pos.c };
-          pos = first;
-          visited.add(keyOf(first));
-          moved = true;
-          break;
-        }
-      }
-      // Phase 2: no positive candidate worked → pick the best available
-      // (least-negative) walkable neighbor. This prevents the agent from
-      // getting permanently stuck at dead ends in standalone mode.
-      // In the Python ecosystem, the CompositeAgent would switch to
-      // GlobalPlanner here; standalone, we force backtracking.
-      if (!moved) {
-        for (var cj = 0; cj < candidates.length; cj++) {
-          var ftarget = candidates[cj][0];
-          var ffirst = firstStepA(pos.r, pos.c, ftarget, fogMap);
-          if (ffirst && ffirst.r >= 0 && ffirst.r < rows && ffirst.c >= 0 && ffirst.c < cols
-              && groundTruth[ffirst.r][ffirst.c] !== "#") {
-            prevPos = { r: pos.r, c: pos.c };
-            pos = ffirst;
-            visited.add(keyOf(ffirst));
-            moved = true;
-            usedFallback = true;
-            break;
-          }
-        }
+        if (candidates[ci][1] <= 0) break;
+        var first = firstStepA(pos.r, pos.c, candidates[ci][0], fogMap);
+        if (first) { nextPos = first; break; }
       }
 
-      if (!moved) {
+      if (!nextPos) {
         stuckCount += 1;
         if (stuckCount >= COMPARE_MAX_STUCK) break;
-      } else if (usedFallback) {
-        // Consecutive fallback moves = effectively stuck (just going in circles)
-        stuckCount += 1;
-        if (stuckCount >= COMPARE_MAX_STUCK) break;
-      } else {
-        stuckCount = 0;
+        continue;
       }
 
-      // Reveal 3x3 around PREVIOUS position (where the agent LEFT).
-      // This creates unexplored cells at the forward edge of the fog so that
-      // the next scoring still has unexplored neighbors to trigger explore_bonus.
-      // Matches Python LocalSimulator where _reveal_fov happens in _finish_maze_step
-      // (after the move), but the key difference is we reveal at the OLD position
-      // so the 8-neighbor scoring window extends beyond the revealed area.
-      var revealTarget = prevPos || pos;
-      revealFog(fogMap, groundTruth, revealTarget, viewRadius);
+      if (nextPos.r < 0 || nextPos.r >= rows || nextPos.c < 0 || nextPos.c >= cols
+          || groundTruth[nextPos.r][nextPos.c] === "#") {
+        stuckCount += 1;
+        if (stuckCount >= COMPARE_MAX_STUCK) break;
+        continue;
+      }
+
+      prevPos = { r: pos.r, c: pos.c };
+      pos = nextPos;
+      visited.add(keyOf(pos));
+      stuckCount = 0;
+
+      // Reveal at current position (matching Python _finish_maze_step)
+      revealFog(fogMap, groundTruth, pos, viewRadius);
     }
 
     var totalValue = coins;
-    // Deduplicate path: remove consecutive duplicate positions
-    // (stuck frames where agent can't move inflate the step count)
     var rawPath = frames.map(function (f) { return [f.pos.r, f.pos.c]; });
     var dedupedPath = [];
     for (var dp = 0; dp < rawPath.length; dp++) {
-      if (dp === 0 ||
-          rawPath[dp][0] !== dedupedPath[dedupedPath.length - 1][0] ||
-          rawPath[dp][1] !== dedupedPath[dedupedPath.length - 1][1]) {
+      if (dp === 0 || rawPath[dp][0] !== dedupedPath[dedupedPath.length - 1][0] || rawPath[dp][1] !== dedupedPath[dedupedPath.length - 1][1]) {
         dedupedPath.push(rawPath[dp]);
       }
     }
     var moveSteps = Math.max(0, dedupedPath.length - 1);
     var score = moveSteps > 0 ? totalValue / moveSteps : 0;
 
-    // Build output_result.json for algorithm A
     var outputResult = {
       success: reachedExit && allBossesDefeated,
-      path: dedupedPath,
-      path_length: dedupedPath.length,
-      move_steps: moveSteps,
-      final_coin: coins,
+      path: dedupedPath, path_length: dedupedPath.length,
+      move_steps: moveSteps, final_coin: coins,
       coin_step_ratio: moveSteps > 0 ? coins / moveSteps : 0,
       boss_success: allBossesDefeated,
-      boss_total_turns: bossTotalTurns,
-      boss_revive_count: bossReviveCount,
+      boss_total_turns: bossTotalTurns, boss_revive_count: bossReviveCount,
       boss_coin_cost: bossCoinCost,
       boss_skill_sequence_lengths: bossSkillSequenceLengths,
       boss_skill_sequences: bossSkillSequences
@@ -1513,9 +1790,8 @@
           event = "Trap triggered, coins -" + TRAP_DAMAGE;
           phase = "Risk Handling";
         } else if (currentCell === "B" && bossHpList.length > 0) {
-          var bossHp = bossHpList.shift();
           var battleResult = runBossBattle(
-            [bossHp],
+            bossHpList.slice(),
             data.PlayerSkills || [[8, 4], [2, 0], [4, 2], [6, 3]],
             data.minRouds || 20,
             data.CoinConsumption || 5,
@@ -1533,11 +1809,12 @@
             bossSkillSequences = bossSkillSequences.concat(battleResult.skillSequences);
           }
           if (battleResult.won) {
-            bossDefeated += 1;
+            bossDefeated += (Array.isArray(data.B) ? data.B.length : 1);
             bossEncounter = { bossIndex: bossDefeated, bossTotal: (Array.isArray(data.B) ? data.B.length : 0) };
             event = "Boss " + bossDefeated + " defeated";
             phase = "Boss Combat";
-            if (bossHpList.length === 0) allBossesDefeated = true;
+            bossHpList.length = 0;
+            allBossesDefeated = true;
           } else {
             event = "Boss combat failed, coins remaining " + coins;
             phase = "Boss Combat";
@@ -1818,27 +2095,28 @@ function runBossBattleReplay(bossHpList, rawSkills, minRounds, coinConsumption, 
     var si = skillSequence[turn];
 
     if (cds[si] !== 0) {
+      console.warn("[Algo E] Boss replay FAILED: skill " + si + " on cooldown at turn " + turn + ", cds=" + JSON.stringify(cds));
       return { won: false, coinsAfter: startingCoins, totalTurns: turn, reviveCount: 0, coinCost: 0, skillSequenceLengths: [usedSequence.length], skillSequences: [usedSequence], error: "Skill on cooldown" };
     }
 
     currentHp -= rawSkills[si][0];
     usedSequence.push(si);
 
-    // Spec rule: tick others down, set used to its cooldown
-    for (var i = 0; i < cds.length; i++) {
-      if (i === si) { cds[i] = rawSkills[i][1]; }
-      else { cds[i] = Math.max(0, cds[i] - 1); }
-    }
+    // Tick all down, then set used skill's cooldown (matching project rule)
+    for (var i = 0; i < cds.length; i++) { if (cds[i] > 0) cds[i]--; }
+    cds[si] = rawSkills[si][1];
 
     if (currentHp <= 0) {
       bossIndex++;
       if (bossIndex >= bossHpList.length) {
+        console.log("[Algo E] Boss replay SUCCESS: " + usedSequence.length + " turns, " + bossHpList.length + " bosses defeated");
         return { won: true, coinsAfter: startingCoins, totalTurns: usedSequence.length, reviveCount: 0, coinCost: 0, skillSequenceLengths: [usedSequence.length], skillSequences: [usedSequence] };
       }
       currentHp = bossHpList[bossIndex];
     }
   }
 
+  console.warn("[Algo E] Boss replay FAILED: sequence exhausted, bossIndex=" + bossIndex + "/" + bossHpList.length + ", remaining HP=" + currentHp);
   return { won: false, coinsAfter: startingCoins, totalTurns: usedSequence.length, reviveCount: 0, coinCost: 0, skillSequenceLengths: [usedSequence.length], skillSequences: [usedSequence], error: "Not all bosses defeated" };
 }
 
@@ -1886,19 +2164,24 @@ function simulateOptimalPathReplay(data) {
     rawPath.push([r, c]);
     revealFog(fogMap, groundTruth, { r: r, c: c }, 1);
     var cell = groundTruth[r][c];
+    console.log("[Algo E] step " + i + " pos=(" + r + "," + c + ") cell='" + cell + "' coins=" + coins);
 
     if (cell === "C" || cell === "G") {
       coins += 50;
       collectedCoins.push([r, c]);
       groundTruth[r][c] = " ";
       fogMap[r][c] = " ";
+      console.log("[Algo E]   -> collected coin, coins=" + coins);
     } else if (cell === "T") {
       coins -= 30;
       triggeredTraps.push([r, c]);
       groundTruth[r][c] = " ";
       fogMap[r][c] = " ";
+      console.log("[Algo E]   -> triggered trap, coins=" + coins);
     } else if (cell === "B") {
+      console.log("[Algo E]   -> BOSS FIGHT, HP=" + JSON.stringify(data.B) + " skills=" + JSON.stringify(data.PlayerSkills));
       var battle = runBossBattleReplay(data.B, data.PlayerSkills, data.minRouds || 15, data.CoinConsumption || 5, coins, plan.bossSkillSequence);
+      console.log("[Algo E]   -> boss result: won=" + battle.won + " turns=" + battle.totalTurns);
       bossSuccess = battle.won;
       coins = battle.coinsAfter;
       bossTotalTurns = battle.totalTurns;
@@ -1910,6 +2193,7 @@ function simulateOptimalPathReplay(data) {
       groundTruth[r][c] = " ";
       fogMap[r][c] = " ";
     } else if (cell === "E") {
+      console.log("[Algo E]   -> EXIT, bossSuccess=" + bossSuccess);
       if (bossSuccess) { success = true; break; }
     }
   }
@@ -3367,16 +3651,19 @@ function simulateRatioAwareFogPlanner(data) {
     resultE = simulateOptimalPathReplay(data);
     var timeE = performance.now() - startE;
 
-    // Build original plan for comparison
+    // Run fog-constrained Original (same A* planning, fogMap only)
+    var startOrig = performance.now();
+    var resultOrig = simulateFogOriginal(data);
+    var timeOrig = performance.now() - startOrig;
+    // Cache old full-knowledge frames for viewing
     if (!state._originalFrames) {
-      var origResult = createFrames(data);
-      state._originalFrames = origResult.frames;
-      state._originalRoute = origResult.route;
+      var origFramesCache = createFrames(data);
+      state._originalFrames = origFramesCache.frames;
+      state._originalRoute = origFramesCache.route;
     }
-    var origFrames = state._originalFrames;
-    var origMoveSteps = Math.max(0, origFrames.length - 1);
-    var origCoins = origFrames.length ? (origFrames[origFrames.length - 1].coins || 0) : 0;
-    var origScore = origMoveSteps > 0 ? origCoins / origMoveSteps : 0;
+    var origScore = resultOrig.coin_step_ratio || 0;
+    var origMoveSteps = resultOrig.move_steps || 0;
+    var origCoins = resultOrig.final_coin || 0;
 
     // Determine best algorithm (including original + C + D)
     var best = "A";
@@ -3399,9 +3686,12 @@ function simulateRatioAwareFogPlanner(data) {
       timeC: timeC,
       timeD: timeD,
       timeE: timeE,
+      timeOrig: timeOrig,
+      algoOrig: resultOrig,
       origScore: origScore,
       origCoins: origCoins,
       origMoveSteps: origMoveSteps,
+      timeOrig: timeOrig,
       winner: resultA.score > resultB.score ? "A" : (resultB.score > resultA.score ? "B" : "tie"),
       bestOverall: best
     };
@@ -3469,13 +3759,12 @@ function simulateRatioAwareFogPlanner(data) {
       output = state.compareResult.algoE;
       suffix = "_E";
     } else {
-      // Build original output from cached frames
-      if (!state._originalFrames) {
-        var origResult = createFrames(state.data);
-        state._originalFrames = origResult.frames;
-        state._originalRoute = origResult.route;
+      // Fog-constrained Original result
+      if (state.compareResult.algoOrig && state.compareResult.algoOrig.path && state.compareResult.algoOrig.path.length > 0) {
+        output = state.compareResult.algoOrig;
+      } else {
+        output = { success: false, path: [], path_length: 0, move_steps: 0, final_coin: 0, coin_step_ratio: 0, boss_success: false, boss_total_turns: 0, boss_revive_count: 0, boss_coin_cost: 0, boss_skill_sequence_lengths: [], boss_skill_sequences: [], collectedCoins: [], triggeredTraps: [] };
       }
-      output = buildOriginalOutput();
       suffix = "_original";
     }
     if (!output) {
@@ -3573,7 +3862,7 @@ function simulateRatioAwareFogPlanner(data) {
           '<span class="compare-card-letter">O</span>' +
           '<div class="compare-card-titles">' +
             '<div class="compare-card-title">Original Plan</div>' +
-            '<div class="compare-card-desc">Pre-computed global route, full map knowledge</div>' +
+            '<div class="compare-card-desc">A* planner, fogMap only, marginal ratio filter</div>' +
           '</div>' +
           winnerBadge +
         '</div>' +
@@ -3581,7 +3870,7 @@ function simulateRatioAwareFogPlanner(data) {
           '<div class="compare-metric"><span>总分/总步数</span><strong>' + scoreFormatted + '</strong></div>' +
           '<div class="compare-metric"><span>总步数</span><strong>' + cr.origMoveSteps + '</strong></div>' +
           '<div class="compare-metric"><span>Final Coins</span><strong>' + cr.origCoins + '</strong></div>' +
-          '<div class="compare-metric"><span>-</span><strong>-</strong></div>' +
+          '<div class="compare-metric"><span>耗时</span><strong>' + (cr.timeOrig ? cr.timeOrig.toFixed(0) + " ms" : "-") + '</strong></div>' +
         '</div>' +
       '</div>'
     );
@@ -3636,19 +3925,27 @@ function simulateRatioAwareFogPlanner(data) {
       result = state.compareResult.algoE;
       label = "Algorithm E (Optimal Replay)";
     } else {
-      // Rebuild original route
-      if (!state._originalFrames) {
-        var origResult = createFrames(state.data);
-        state._originalFrames = origResult.frames;
-        state._originalRoute = origResult.route;
+      // Original: fog-constrained A* planner
+      result = state.compareResult.algoOrig;
+      // Build display frames from result path with proper FOG reveals
+      var oGrid = cloneGrid(state.data.maze);
+      var oFrames = []; var oRevealed = new Set(); var oCoins = 0;
+      var oRows = state.data.maze.length; var oCols = state.data.maze[0].length;
+      if (result && result.path && result.path.length > 0) {
+        for (var oi = 0; oi < result.path.length; oi++) {
+          var op = result.path[oi]; var oc = state.data.maze[op[0]][op[1]];
+          for (var orr=-1;orr<=1;orr++) for (var occ=-1;occ<=1;occ++) { var or2=op[0]+orr,oc2=op[1]+occ; if(or2>=0&&oc2>=0&&or2<oRows&&oc2<oCols)oRevealed.add(or2+","+oc2); }
+          if(oi>0&&(oc==="C"||oc==="G")){oCoins+=COIN_VALUE;oGrid[op[0]][op[1]]=" ";}else if(oi>0&&oc==="T"){oCoins-=TRAP_DAMAGE;oGrid[op[0]][op[1]]=" ";}else if(oi>0&&oc==="B"){oGrid[op[0]][op[1]]=" ";}
+          oFrames.push({round:oi,pos:{r:op[0],c:op[1]},coins:oCoins,bossCount:0,phase:"探索中",event:"",sourceCell:state.data.maze[op[0]][op[1]],bossEncounter:null,grid:cloneGrid(oGrid),revealed:new Set(oRevealed),heat:[],exploredRatio:oRevealed.size/(oRows*oCols)});
+        }
+        state.frames = oFrames;
+        state.route = oFrames.map(function(f){return f.pos;});
+      } else {
+        state.frames = state._originalFrames || [];
+        state.route = state._originalRoute || [];
       }
-      state.frames = state._originalFrames;
-      state.route = state._originalRoute;
-      // Show the original's ratio too
-      var origTotalSteps = Math.max(0, state._originalFrames.length - 1);
-      var origCoins = state._originalFrames.length ? (state._originalFrames[state._originalFrames.length - 1].coins || 0) : 0;
-      state._compareViewScore = origTotalSteps > 0 ? origCoins / origTotalSteps : 0;
-      label = "Original Plan";
+      state._compareViewScore = result ? result.coin_step_ratio : 0;
+      label = "Original (Fog)";
     }
 
     if (mode === "A" || mode === "B") {
