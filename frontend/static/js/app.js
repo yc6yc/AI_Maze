@@ -166,7 +166,6 @@ createApp({
       bossSourceMode: "map",
       manualBossHealthDraft: null,
       manualBossHealths: [],
-      manualBossHealthsSent: 0,
       manualBossInputClosed: false,
       manualBossStreamStatus: "",
       sessionId: "",
@@ -360,7 +359,7 @@ createApp({
     },
     async enterGame() {
       if (this.bossSourceMode === "manual") {
-        await this.runManualBossSequence({ finalInput: false });
+        await this.runManualBossSequence();
         return;
       }
       this.busy = true;
@@ -418,7 +417,6 @@ createApp({
         }
       }
       this.sessionId = "";
-      this.manualBossHealthsSent = 0;
       this.state = null;
       this.finalState = null;
       this.frames = [];
@@ -594,18 +592,18 @@ createApp({
         return;
       }
       this.bossSourceMode = mode;
+      this.resetManualBossStream();
     },
     resetManualBossStream() {
       this.manualBossHealthDraft = null;
       this.manualBossHealths = [];
-      this.manualBossHealthsSent = 0;
       this.manualBossInputClosed = false;
       this.manualBossStreamStatus = "";
     },
     readManualBossDraft() {
       const health = Number(this.manualBossHealthDraft);
-      if (!Number.isFinite(health) || health <= 0) {
-        throw new Error("请输入当前 Boss 的血量，且必须大于 0");
+      if (!Number.isFinite(health) || (health <= 0 && health !== -1)) {
+        throw new Error("请输入当前 Boss 血量，或输入 -1 表示结束当前 Boss 输入");
       }
       return Math.floor(health);
     },
@@ -613,73 +611,56 @@ createApp({
       return this.manualBossHealthDraft !== null && this.manualBossHealthDraft !== "" && this.manualBossHealthDraft !== undefined;
     },
     async fightManualBoss() {
-      if (this.bossSourceMode !== "manual" || this.manualBossInputClosed || this.busy) {
+      if (this.bossSourceMode !== "manual" || this.busy) {
         return;
       }
-      const health = this.readManualBossDraft();
-      this.manualBossHealths.push(health);
-      this.manualBossHealthDraft = null;
-      this.manualBossStreamStatus = `已输入 Boss #${this.manualBossHealths.length}，正在接着当前进度试打`;
-      await this.runManualBossSequence({ finalInput: false });
+      await this.submitManualBossInput();
     },
     async finishManualBossInput() {
       if (this.bossSourceMode !== "manual" || this.busy) {
         return;
       }
-      if (this.hasManualBossDraft()) {
-        const health = this.readManualBossDraft();
-        this.manualBossHealths.push(health);
-        this.manualBossHealthDraft = null;
-      } else if (!this.manualBossHealths.length) {
-        const health = this.readManualBossDraft();
-        this.manualBossHealths.push(health);
-        this.manualBossHealthDraft = null;
-      }
-      this.manualBossInputClosed = true;
-      if (this.manualBossHealthsSent >= this.manualBossHealths.length && this.state?.result === "win") {
-        this.manualBossStreamStatus = "输入结束：已成功打完";
+      await this.submitManualBossInput(-1);
+    },
+    async runManualBossSequence() {
+      if (!this.sessionId) {
+        await this.startManualExploration();
         return;
       }
-      this.manualBossStreamStatus = "输入结束，正在按剩余 Boss 序列继续规划";
-      await this.runManualBossSequence({ finalInput: true });
+      if (this.state?.awaiting_boss_input) {
+        this.manualBossStreamStatus = "已到达 Boss 位置，请在左侧输入当前 Boss 血量";
+        this.statusText = "waiting boss input";
+        return;
+      }
+      await this.continueManualExploration();
     },
-    async runManualBossSequence({ finalInput }) {
+    async startManualExploration() {
       this.busy = true;
       this.clearTimer();
       try {
-        let data = await this.startOrAppendManualBoss({ revealAll: finalInput, finalInput });
-        let result = data.state?.result || "done";
-        let won = result === "win";
-        if (!finalInput && !won) {
-          this.manualBossInputClosed = true;
-          this.manualBossStreamStatus = "当前输入序列未打过，正在按已知血量序列重新规划";
-          data = await this.restartManualBossRun({ revealAll: true });
-          result = data.state?.result || "done";
-          won = result === "win";
+        if (this.sessionId) {
+          await mazeApi.deleteSim(this.sessionId);
         }
+        const data = await mazeApi.startRunSim(
+          this.selectedMap,
+          this.selectedAgent,
+          undefined,
+          { boss_source: "manual" }
+        );
         this.sessionId = data.session_id;
         this.currentMap = this.selectedMap;
-        if (data.appended) {
-          const nextIndex = this.extendPlayback(data.state);
-          if (Number.isInteger(nextIndex)) {
-            this.playIndex = Math.max(0, nextIndex - 1);
-          }
-        } else {
-          this.eventLog = [];
-          this.loadPlayback(data.state);
-        }
-        if (finalInput || !won) {
-          this.manualBossInputClosed = true;
-        }
-        this.manualBossStreamStatus = finalInput
-          ? `输入结束：${won ? "已成功打完" : "未打过，已按完整序列继续规划"}`
-          : `Boss #${this.manualBossHealths.length} ${won ? "已打过，可继续输入下一个 Boss" : "未打过，可结束输入后按已知序列规划"}`;
+        this.eventLog = [];
+        this.loadPlayback(data.state);
+        this.manualBossInputClosed = false;
+        this.manualBossStreamStatus = data.state?.awaiting_boss_input
+          ? "AI 已到达 Boss 位置，请输入当前 Boss 血量"
+          : data.state?.result || "探索完成";
         if (this.frames.length > 1) {
           this.playing = true;
           this.statusText = "playing";
           this.scheduleStep();
         } else {
-          this.statusText = result;
+          this.statusText = data.state?.result || "done";
         }
       } catch (err) {
         this.statusText = err.message;
@@ -688,55 +669,60 @@ createApp({
         this.busy = false;
       }
     },
-    async startOrAppendManualBoss({ revealAll = false, finalInput = false } = {}) {
-      if (this.bossSourceMode !== "manual") {
-        return null;
+    async submitManualBossInput(value) {
+      if (!this.sessionId) {
+        await this.startManualExploration();
+        return;
       }
-      if (!this.manualBossInputClosed && this.hasManualBossDraft()) {
-        const health = this.readManualBossDraft();
+      const health = value ?? this.readManualBossDraft();
+      if (health !== -1) {
         this.manualBossHealths.push(health);
-        this.manualBossHealthDraft = null;
       }
-      if (!this.manualBossHealths.length) {
-        const health = this.readManualBossDraft();
-        this.manualBossHealths.push(health);
-        this.manualBossHealthDraft = null;
-      }
-      const pending = this.manualBossHealths.slice(this.manualBossHealthsSent);
-      if (!pending.length) {
-        if (finalInput && this.state) {
-          this.manualBossInputClosed = true;
-          this.manualBossStreamStatus = "输入结束：没有新的 Boss，保持当前结果";
-          return { session_id: this.sessionId, state: this.finalState || this.state, appended: true };
+      this.manualBossHealthDraft = null;
+      this.busy = true;
+      this.clearTimer();
+      try {
+        const data = await mazeApi.submitBossHealth(this.sessionId, health, health === -1);
+        this.currentMap = this.selectedMap;
+        const nextIndex = this.extendPlayback(data.state);
+        if (Number.isInteger(nextIndex)) {
+          this.playIndex = Math.max(0, nextIndex - 1);
         }
-        throw new Error("请先输入新的 Boss 血量");
+        if (health === -1) {
+          this.manualBossInputClosed = true;
+          this.manualBossStreamStatus = "当前 Boss 输入结束，AI 将继续探索迷宫";
+          await this.continueManualExploration();
+          return;
+        }
+        this.manualBossStreamStatus = data.state?.awaiting_boss_input
+          ? "当前 Boss 已处理，请继续输入下一个 Boss 血量，或输入 -1 结束"
+          : data.state?.result || "Boss 已处理";
+        this.playing = true;
+        this.statusText = "playing";
+        this.scheduleStep();
+      } catch (err) {
+        this.statusText = err.message;
+        this.manualBossStreamStatus = err.message;
+      } finally {
+        this.busy = false;
       }
-      const firstRun = !this.sessionId;
-      const data = firstRun
-        ? await mazeApi.startRunSim(
-            this.selectedMap,
-            this.selectedAgent,
-            undefined,
-            this.manualBossPayload({ revealAll })
-          )
-        : await mazeApi.appendBosses(this.sessionId, pending, revealAll);
-      this.manualBossHealthsSent = this.manualBossHealths.length;
-      return { ...data, appended: !firstRun };
     },
-    async restartManualBossRun({ revealAll }) {
-      if (this.sessionId) {
-        await mazeApi.deleteSim(this.sessionId);
-        this.sessionId = "";
+    async continueManualExploration() {
+      if (!this.sessionId) {
+        return;
       }
-      this.manualBossHealthsSent = 0;
-      const data = await mazeApi.startRunSim(
-        this.selectedMap,
-        this.selectedAgent,
-        undefined,
-        this.manualBossPayload({ revealAll })
-      );
-      this.manualBossHealthsSent = this.manualBossHealths.length;
-      return { ...data, appended: false };
+      const data = await mazeApi.runSim(this.sessionId);
+      const nextIndex = this.extendPlayback(data.state);
+      if (Number.isInteger(nextIndex)) {
+        this.playIndex = Math.max(0, nextIndex - 1);
+      }
+      this.manualBossInputClosed = false;
+      this.manualBossStreamStatus = data.state?.awaiting_boss_input
+        ? "AI 已到达下一个 Boss 位置，请输入当前 Boss 血量"
+        : data.state?.result || "探索完成";
+      this.playing = true;
+      this.statusText = "playing";
+      this.scheduleStep();
     },
     bossSetupPayload({ revealAll = false } = {}) {
       if (this.bossSourceMode === "map") {
@@ -745,19 +731,7 @@ createApp({
         }
         return { boss_source: "map" };
       }
-      if (!this.manualBossHealths.length) {
-        throw new Error("请先输入至少一个 Boss 血量");
-      }
-      const healths = this.manualBossHealths.map((value) => Number(value));
-      if (healths.some((value) => !Number.isFinite(value) || value <= 0)) {
-        throw new Error("Boss 血量必须全部大于 0");
-      }
-      return {
-        boss_source: "manual",
-        boss_count: healths.length,
-        boss_healths: healths,
-        boss_healths_revealed: revealAll,
-      };
+      return { boss_source: "manual", boss_healths_revealed: revealAll };
     },
     manualBossPayload({ revealAll = false } = {}) {
       return this.bossSetupPayload({ revealAll });

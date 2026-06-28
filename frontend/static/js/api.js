@@ -47,9 +47,9 @@
     runSim(sid, maxRounds) {
       return request("POST", `/api/sim/${sid}/run`, { max_rounds: maxRounds });
     },
-    appendBosses(sid, bossHealths, revealAll) {
-      return request("POST", `/api/sim/${sid}/bosses/append`, {
-        boss_healths: bossHealths,
+    submitBossHealth(sid, bossHealth, revealAll) {
+      return request("POST", `/api/sim/${sid}/bosses/input`, {
+        boss_health: bossHealth,
         boss_healths_revealed: !!revealAll,
       });
     },
