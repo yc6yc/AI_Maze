@@ -74,9 +74,10 @@ class LocalSimulator:
             self.boss_health_source = "manual"
             self.boss_health_sequence = normalize_boss_healths(boss_healths)
         self._validate_boss_health_sequence()
-        self.boss_battle_after_maze = self.boss_health_source == "manual"
-        if self.boss_battle_after_maze:
-            self._neutralize_maze_boss_cells()
+        self.boss_battle_after_maze = False
+        self.awaiting_boss_input = False
+        self.pending_boss_pos: Position | None = None
+        self.manual_boss_input_closed = False
         self.min_rounds = int(data.get("minRouds", 20))
         self.coin_consumption = int(data.get("CoinConsumption", 0))
         self.boss_handler = boss_handler
@@ -113,7 +114,7 @@ class LocalSimulator:
         return cls(load_json(path), **kwargs)
 
     def step(self, action: Action) -> dict[str, Any]:
-        if self.ctx.done:
+        if self.ctx.done or self.awaiting_boss_input:
             return self.snapshot()
 
         self.last_boss_event = None
@@ -121,8 +122,13 @@ class LocalSimulator:
         self.ctx.step_count += 1
         self.ctx.player.rounds += 1
         action = action or Action()
-        combat_target = self._combat_target(action)
-        if combat_target is not None:
+        manual_boss_target = self._manual_boss_input_target(action)
+        combat_target = None if manual_boss_target is not None else self._combat_target(action)
+        if manual_boss_target is not None:
+            self.ctx.player.pos = manual_boss_target
+            self._request_manual_boss_input(manual_boss_target)
+            self._reveal_fov(manual_boss_target)
+        elif combat_target is not None:
             self._handle_boss(combat_target)
             self._reveal_fov(self.ctx.player.pos)
         else:
@@ -138,36 +144,67 @@ class LocalSimulator:
 
     def run(self, agent: Any, max_rounds: int | None = None) -> dict[str, Any]:
         limit = max_rounds or self.max_steps
-        while not self.ctx.done and self.ctx.step_count < limit:
+        while not self.ctx.done and not self.awaiting_boss_input and self.ctx.step_count < limit:
             action = agent.decide(self.ctx)
             self.step(action)
         return self.summary()
 
-    def append_manual_bosses(self, boss_healths: list[int], *, reveal_all: bool = False) -> dict[str, Any]:
+    def submit_manual_boss_health(self, boss_health: int, *, reveal_all: bool = False) -> dict[str, Any]:
         if self.boss_health_source != "manual":
-            raise ValueError("Bosses can only be appended in manual boss mode")
-        new_healths = normalize_boss_healths(boss_healths)
-        if not new_healths:
-            raise ValueError("boss_healths must not be empty")
+            raise ValueError("Boss health can only be submitted in manual boss mode")
+        if not self.awaiting_boss_input or self.pending_boss_pos is None:
+            raise ValueError("The player is not waiting for manual Boss input")
         if self.ctx.done and self.ctx.result == "lose":
-            raise ValueError("Cannot append bosses after the run has failed")
-        if self.ctx.player.pos != self.end:
-            raise ValueError("Manual bosses can only be appended after maze exploration reaches the exit")
+            raise ValueError("Cannot submit Boss health after the run has failed")
+        if boss_health <= 0:
+            raise ValueError("Boss health must be greater than 0")
 
-        self.boss_health_sequence.extend(new_healths)
+        self.boss_health_sequence.append(int(boss_health))
         if reveal_all:
             self.all_boss_healths_revealed = True
-        self.ctx.done = False
-        self.ctx.result = "running"
-        self.ctx.boss_defeated = False
+        self.awaiting_boss_input = False
+        self.manual_boss_input_closed = False
         self.ctx.last_event = None
         self.last_boss_event = None
 
-        self._handle_boss(self.ctx.player.pos)
-        if self._all_bosses_defeated() and not self.ctx.done:
-            self.ctx.done = True
-            self.ctx.result = "win"
-            self.ctx.boss_defeated = True
+        self._handle_boss(self.pending_boss_pos)
+        if not self.ctx.done:
+            self.awaiting_boss_input = True
+            self.ctx.last_event = {
+                "type": "boss_input_required",
+                "pos": list(self.pending_boss_pos),
+                "message": "waiting for next Boss health; input -1 to finish",
+                "known_boss_count": len(self.boss_health_sequence),
+            }
+        self._append_snapshot(self.ctx.last_event)
+        return self.snapshot()
+
+    def finish_manual_boss_input(self) -> dict[str, Any]:
+        if self.boss_health_source != "manual":
+            raise ValueError("Manual Boss input can only be finished in manual boss mode")
+        if not self.awaiting_boss_input or self.pending_boss_pos is None:
+            raise ValueError("The player is not waiting for manual Boss input")
+        if self.ctx.done and self.ctx.result == "lose":
+            raise ValueError("Cannot finish Boss input after the run has failed")
+        if self.defeated_boss_count < len(self.boss_health_sequence):
+            raise ValueError("Known Bosses must be defeated before input can be finished")
+
+        pos = self.pending_boss_pos
+        self.awaiting_boss_input = False
+        self.manual_boss_input_closed = True
+        self.ctx.maze.defeated_bosses.add(pos)
+        r, c = pos
+        if self.ground_truth[r][c] == "B":
+            self.ground_truth[r][c] = " "
+        self.pending_boss_pos = None
+        self.ctx.boss_defeated = True
+        self.ctx.last_event = {
+            "type": "boss_input_finished",
+            "pos": list(pos),
+            "message": "manual Boss input finished; continuing maze exploration",
+            "known_boss_count": len(self.boss_health_sequence),
+        }
+        self._reveal_fov(self.ctx.player.pos)
         self._append_snapshot(self.ctx.last_event)
         return self.snapshot()
 
@@ -211,20 +248,12 @@ class LocalSimulator:
                 "message": f"trap cost {self.trap_damage} value",
             }
         elif cell == "B":
-            if self.boss_battle_after_maze:
-                self.ground_truth[r][c] = " "
-                self.ctx.last_event = {"type": "move", "pos": list(pos), "message": "moved"}
+            if self.boss_health_source == "manual":
+                self._request_manual_boss_input(pos)
             else:
                 self._handle_boss(pos)
         elif cell == "E":
-            if self.boss_battle_after_maze:
-                self._handle_boss(pos)
-                if self._all_bosses_defeated() and not self.ctx.done:
-                    self.ctx.done = True
-                    self.ctx.result = "win"
-                    self.ctx.boss_defeated = True
-                    self.ctx.last_event = {"type": "win", "pos": list(pos), "message": "exit reached after boss sequence"}
-            elif self._all_bosses_defeated():
+            if self._exit_unlocked():
                 self.ctx.done = True
                 self.ctx.result = "win"
                 self.ctx.boss_defeated = True
@@ -240,7 +269,8 @@ class LocalSimulator:
 
     def _handle_boss(self, pos: Position) -> None:
         total_rounds_used = self.boss_total_rounds_used
-        while not self._all_bosses_defeated() and not self.ctx.done:
+        target_count = self._manual_visible_boss_target_count() if self.boss_health_source == "manual" else None
+        while not self._all_bosses_defeated(target_count) and not self.ctx.done:
             health_idx = self._current_boss_index()
             health = self.boss_health_sequence[health_idx]
             self.encountered_boss_count = max(self.encountered_boss_count, health_idx + 1)
@@ -275,7 +305,7 @@ class LocalSimulator:
                     total_rounds_used = total_rounds_after
                     self.boss_total_rounds_used = total_rounds_used
                     self.defeated_boss_count += 1
-                    if self._all_bosses_defeated():
+                    if self.boss_health_source != "manual" and self._all_bosses_defeated():
                         self._clear_boss_cells()
                     self.last_boss_event = {
                         **base_event,
@@ -290,9 +320,13 @@ class LocalSimulator:
                 value_after, actual_cost = self._consume_revive_value(value_before)
                 self.ctx.player.coins = value_after
                 can_revive = self.coin_consumption > 0 and value_after > 0
+                manual_revive_wait = self.boss_health_source == "manual" and can_revive
                 cooldowns_after_revive = [0 for _skill in self.ctx.player.skills] if can_revive else None
                 known_boss_healths_after_revive = (
-                    self._boss_health_records(known_count=len(self.boss_health_sequence), defeated_count=0)
+                    self._boss_health_records(
+                        known_count=self.defeated_boss_count if manual_revive_wait else len(self.boss_health_sequence),
+                        defeated_count=self.defeated_boss_count if manual_revive_wait else 0,
+                    )
                     if can_revive
                     else None
                 )
@@ -316,17 +350,21 @@ class LocalSimulator:
                     "coins_after": value_after,
                     "value_after": value_after,
                     "message": (
+                        "boss challenge failed, revived; waiting for manual Boss input"
+                        if manual_revive_wait
+                        else
                         "boss challenge failed, revived; restarted from Boss #1"
                         if can_revive
                         else "boss challenge failed, value exhausted"
                     ),
                     "rounds_reset_on_revive": can_revive,
-                    "boss_sequence_reset_on_revive": can_revive,
-                    "restart_boss_order": 1 if can_revive else None,
+                    "boss_sequence_reset_on_revive": can_revive and not manual_revive_wait,
+                    "restart_boss_order": None if manual_revive_wait else 1 if can_revive else None,
                     "skill_cooldowns_reset_on_revive": can_revive,
                     "cooldowns_after_revive": cooldowns_after_revive,
-                    "boss_healths_revealed_on_revive": can_revive,
+                    "boss_healths_revealed_on_revive": can_revive and not manual_revive_wait,
                     "known_boss_healths_after_revive": known_boss_healths_after_revive,
+                    "manual_input_required_after_revive": manual_revive_wait,
                 }
                 self.ctx.last_event = self.last_boss_event
                 self.boss_events.append(deepcopy(self.last_boss_event))
@@ -336,10 +374,14 @@ class LocalSimulator:
                     self.ctx.result = "lose"
                     break
                 self._reset_skill_cooldowns()
-                self.all_boss_healths_revealed = True
-                self.defeated_boss_count = 0
                 total_rounds_used = 0
                 self.boss_total_rounds_used = 0
+                if self.boss_health_source == "manual":
+                    if health_idx < len(self.boss_health_sequence):
+                        self.boss_health_sequence.pop(health_idx)
+                    return
+                self.all_boss_healths_revealed = True
+                self.defeated_boss_count = 0
                 break
 
     def _build_boss_event(
@@ -459,8 +501,16 @@ class LocalSimulator:
             raise ValueError("Boss health sequence is exhausted")
         return self.defeated_boss_count
 
-    def _all_bosses_defeated(self) -> bool:
-        return self.defeated_boss_count >= len(self.boss_health_sequence)
+    def _all_bosses_defeated(self, target_count: int | None = None) -> bool:
+        return self.defeated_boss_count >= (len(self.boss_health_sequence) if target_count is None else target_count)
+
+    def _manual_visible_boss_target_count(self) -> int:
+        return len(self.boss_health_sequence)
+
+    def _exit_unlocked(self) -> bool:
+        if self.boss_health_source == "manual":
+            return self.manual_boss_input_closed and self._all_bosses_defeated()
+        return self._all_bosses_defeated()
 
     def _clear_boss_cells(self) -> None:
         for pos in self.boss_positions:
@@ -479,12 +529,12 @@ class LocalSimulator:
         health_count = len(self.boss_health_sequence)
         if boss_cell_count == 0 and health_count == 0:
             return
-        if self.boss_health_source == "manual" and health_count > 0:
+        if self.boss_health_source == "manual":
             return
         if boss_cell_count == 0 and health_count > 0:
             raise ValueError("Boss healths were provided, but the maze has no B cells")
         if health_count == 0:
-            raise ValueError("Boss health array is missing; provide manual boss_count and boss_healths")
+            raise ValueError("Boss health array is missing; switch to manual live Boss input")
 
     def _tick_cooldowns(self, used_skill: int | None = None) -> None:
         for idx, skill in enumerate(self.ctx.player.skills):
@@ -509,7 +559,7 @@ class LocalSimulator:
         return self.ground_truth[r][c] in WALKABLE_CELLS
 
     def _combat_target(self, action: Action) -> Position | None:
-        if self._all_bosses_defeated() or self.boss_battle_after_maze:
+        if self._all_bosses_defeated() or self.boss_health_source == "manual":
             return None
         candidates = [self.ctx.player.pos]
         r, c = self.ctx.player.pos
@@ -523,6 +573,29 @@ class LocalSimulator:
             if action.normalized_move() == Move.STAY.value:
                 return pos
         return None
+
+    def _manual_boss_input_target(self, action: Action) -> Position | None:
+        if self.boss_health_source != "manual" or self.awaiting_boss_input:
+            return None
+        if action.use_skill is None and action.normalized_move() != Move.STAY.value:
+            return None
+        r, c = self.ctx.player.pos
+        for pos in (self.ctx.player.pos, (r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+            pr, pc = pos
+            if 0 <= pr < self.rows and 0 <= pc < self.cols and self.ground_truth[pr][pc] == "B":
+                return pos
+        return None
+
+    def _request_manual_boss_input(self, pos: Position) -> None:
+        self.awaiting_boss_input = True
+        self.manual_boss_input_closed = False
+        self.pending_boss_pos = pos
+        self.ctx.last_event = {
+            "type": "boss_input_required",
+            "pos": list(pos),
+            "message": "waiting for current Boss health",
+            "known_boss_count": len(self.boss_health_sequence),
+        }
 
     def _scan_bosses(self) -> list[Position]:
         result: list[Position] = []
@@ -550,7 +623,10 @@ class LocalSimulator:
             "event": event if event is not None else self.ctx.last_event,
             "boss_event": self.last_boss_event,
             "boss_events": deepcopy(self.boss_events),
-            "boss_health_source": self.boss_health_source if self.boss_health_sequence else "none",
+            "boss_health_source": self.boss_health_source if (self.boss_health_sequence or self.boss_health_source == "manual") else "none",
+            "awaiting_boss_input": self.awaiting_boss_input,
+            "pending_boss_pos": list(self.pending_boss_pos) if self.pending_boss_pos else None,
+            "manual_boss_input_closed": self.manual_boss_input_closed,
             "encountered_bosses": self.encountered_boss_count,
             "defeated_boss_count": self.defeated_boss_count,
             "all_boss_healths_revealed": self.all_boss_healths_revealed,

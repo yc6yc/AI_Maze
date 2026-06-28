@@ -84,18 +84,20 @@
                 <small>启动前不显示 Boss 数量和血量</small>
               </template>
               <template v-else>
+                <button class="secondary-btn" type="button" :disabled="busy || !!sessionId" @click="startManualExploration">开始按算法探索</button>
                 <label>
-                  当前 Boss 血量
-                  <input type="number" min="1" step="1" v-model.number="manualBossHealthDraft" :disabled="manualBossInputClosed || busy" />
+                  当前 Boss 血量 / -1 结束
+                  <input type="number" step="1" v-model.number="manualBossHealthDraft" :disabled="busy || !state?.awaiting_boss_input" @keyup.enter="fightManualBoss" />
                 </label>
                 <div class="manual-stream-actions">
-                  <button class="secondary-btn" type="button" :disabled="busy || manualBossInputClosed" @click="fightManualBoss">打当前 Boss</button>
-                  <button class="secondary-btn" type="button" :disabled="busy || !manualBossHealths.length" @click="finishManualBossInput">结束输入</button>
+                  <button class="secondary-btn" type="button" :disabled="busy || !state?.awaiting_boss_input" @click="fightManualBoss">提交并打当前 Boss</button>
+                  <button class="secondary-btn" type="button" :disabled="busy || !state?.awaiting_boss_input" @click="finishManualBossInput">输入 -1 结束</button>
                 </div>
                 <div v-if="manualBossHealths.length" class="known-boss-list">
-                  <small>已输入血量序列</small>
+                  <small>现场已输入血量</small>
                   <span v-for="(hp, idx) in manualBossHealths" :key="idx">#{{ idx + 1 }} HP {{ hp }}</span>
                 </div>
+                <small v-if="state?.awaiting_boss_input" class="manual-stream-status">已到达 Boss 位置，等待现场键盘输入</small>
                 <small v-if="manualBossStreamStatus" class="manual-stream-status">{{ manualBossStreamStatus }}</small>
               </template>
             </div>
@@ -193,7 +195,7 @@
       </main>
 
       <footer class="controlbar glass-panel">
-        <button class="primary-btn" @click="enterGame" :disabled="busy">计算并播放</button>
+        <button class="primary-btn" @click="enterGame" :disabled="busy">{{ bossSourceMode === 'manual' ? '开始/继续探索' : '计算并播放' }}</button>
         <button class="secondary-btn" @click="stepOnce" :disabled="!frames.length || busy || playIndex >= frames.length - 1">单步</button>
         <button class="secondary-btn" @click="togglePlay" :disabled="!frames.length || busy || playIndex >= frames.length - 1">{{ playing ? "暂停" : "播放" }}</button>
         <button class="secondary-btn" @click="runAll" :disabled="!frames.length || busy || playIndex >= frames.length - 1">跳到结尾</button>
@@ -205,7 +207,7 @@
     </div>
 
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-    <script src="/static/js/api.js?v=20260628-23"></script>
-    <script src="/static/js/app.js?v=20260628-23"></script>
+    <script src="/static/js/api.js?v=20260628-25"></script>
+    <script src="/static/js/app.js?v=20260628-25"></script>
   </body>
 </html>
