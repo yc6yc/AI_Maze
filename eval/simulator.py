@@ -162,6 +162,7 @@ class LocalSimulator:
         self.boss_health_sequence.append(int(boss_health))
         if reveal_all:
             self.all_boss_healths_revealed = True
+        self.ctx.boss_defeated = False
         self.awaiting_boss_input = False
         self.manual_boss_input_closed = False
         self.ctx.last_event = None
@@ -197,7 +198,7 @@ class LocalSimulator:
         if self.ground_truth[r][c] == "B":
             self.ground_truth[r][c] = " "
         self.pending_boss_pos = None
-        self.ctx.boss_defeated = True
+        self.ctx.boss_defeated = self._all_bosses_defeated()
         self.ctx.last_event = {
             "type": "boss_input_finished",
             "pos": list(pos),
@@ -305,6 +306,7 @@ class LocalSimulator:
                     total_rounds_used = total_rounds_after
                     self.boss_total_rounds_used = total_rounds_used
                     self.defeated_boss_count += 1
+                    self.ctx.boss_defeated = self._all_bosses_defeated()
                     if self.boss_health_source != "manual" and self._all_bosses_defeated():
                         self._clear_boss_cells()
                     self.last_boss_event = {
@@ -379,9 +381,11 @@ class LocalSimulator:
                 if self.boss_health_source == "manual":
                     if health_idx < len(self.boss_health_sequence):
                         self.boss_health_sequence.pop(health_idx)
+                    self.ctx.boss_defeated = self._all_bosses_defeated()
                     return
                 self.all_boss_healths_revealed = True
                 self.defeated_boss_count = 0
+                self.ctx.boss_defeated = False
                 break
 
     def _build_boss_event(
