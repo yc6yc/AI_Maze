@@ -2,6 +2,8 @@ from agents.ai_maze_composite import AIMazeCompositeAgent
 from agents.ai_maze_global_greedy import AIMazeGlobalGreedyAgent
 from agents.ai_maze_global_planner import AIMazeGlobalPlannerAgent
 from agents.composite_agent import make_agent
+from agents.fog_original import FogOriginalAgent
+from agents.global_greedy_enhanced import GlobalGreedyEnhancedAgent
 from agents.local_3x3_greedy import Local3x3GreedyAgent
 from core.state import GameContext, MazeState, PlayerState
 
@@ -26,6 +28,8 @@ def test_ai_maze_global_agents_can_decide() -> None:
     assert AIMazeGlobalGreedyAgent().decide(ctx).move == "RIGHT"
     assert AIMazeGlobalPlannerAgent().decide(ctx).move in {"RIGHT", "STAY"}
     assert AIMazeCompositeAgent().decide(ctx).move == "RIGHT"
+    assert FogOriginalAgent().decide(ctx).move == "RIGHT"
+    assert GlobalGreedyEnhancedAgent().decide(ctx).move == "RIGHT"
 
 
 def test_make_agent_registers_ai_maze_algorithms() -> None:
@@ -33,3 +37,5 @@ def test_make_agent_registers_ai_maze_algorithms() -> None:
     assert isinstance(make_agent("ai_global_greedy", {}), AIMazeGlobalGreedyAgent)
     assert isinstance(make_agent("ai_global_planner", {}), AIMazeGlobalPlannerAgent)
     assert isinstance(make_agent("ai_composite", {}), AIMazeCompositeAgent)
+    assert isinstance(make_agent("fog_original", {}), FogOriginalAgent)
+    assert isinstance(make_agent("b_enhanced", {}), GlobalGreedyEnhancedAgent)
