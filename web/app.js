@@ -1701,8 +1701,9 @@ function simulateLocalGreedy(data) {
       var rawValue = cfg.frontier_value + cfg.frontier_unknown_weight * unknownCount;
       var frontierScore = rawValue / Math.max(fdistanceCost, 1.0) - 3.0 * (visitCount[fk] || 0);
       // Penalize frontiers whose FIRST STEP goes through heavily-visited territory
+      // Stronger penalty prevents re-entering the same fork branch repeatedly
       var firstStepKey = keyOf(fmovePath[0]);
-      frontierScore -= 2.0 * (visitCount[firstStepKey] || 0);
+      frontierScore -= 5.0 * (visitCount[firstStepKey] || 0);
       candidates.push(["frontier", frontier, frontierScore, fmovePath]);
     }
     } // end exitVisible guard
@@ -1925,15 +1926,28 @@ function simulateLocalGreedy(data) {
         continue;
       }
 
-      // Direction momentum: reward frontiers that continue in the same direction
+      // Direction momentum & oscillation suppression
       if (lastDir) {
         for (var dmi = 0; dmi < candidates.length; dmi++) {
           if (candidates[dmi][0] === "frontier" && candidates[dmi][3] && candidates[dmi][3].length > 0) {
             var fs = candidates[dmi][3][0];
             var fdr = fs.r - pos.r, fdc = fs.c - pos.c;
-            if (fdr === lastDir.dr && fdc === lastDir.dc) candidates[dmi][2] += 6.0;      // same direction: bonus
-            else if (fdr === -lastDir.dr && fdc === -lastDir.dc) candidates[dmi][2] -= 4.0; // reverse: penalty
+            if (fdr === lastDir.dr && fdc === lastDir.dc) {
+              candidates[dmi][2] += 6.0;  // same direction: bonus
+            } else if (fdr === -lastDir.dr && fdc === -lastDir.dc) {
+              candidates[dmi][2] -= 4.0;  // reverse: penalty
+            }
           }
+        }
+      }
+      // ── Score: pick best (port of decide() lines 81-84) ──
+      // Oscillation suppression: penalize candidates whose first step
+      // goes to a position visited within the last 4 steps
+      for (var dmi2 = 0; dmi2 < candidates.length; dmi2++) {
+        if (candidates[dmi2][3] && candidates[dmi2][3].length > 0) {
+          var fsk = keyOf(candidates[dmi2][3][0]);
+          if (visitCount[fsk] >= 3) candidates[dmi2][2] -= 8.0;     // heavily revisited: strong penalty
+          else if (visitCount[fsk] >= 2) candidates[dmi2][2] -= 3.0; // recently returned from here: mild penalty
         }
       }
 
