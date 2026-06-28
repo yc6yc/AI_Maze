@@ -934,6 +934,15 @@ function simulateFogOriginal(data) {
         if (!coinPath || coinPath.length < 2) continue;
 
         var distToCoin = coinPath.length - 1;
+        // Dead-end penalty: coins in cul-de-sacs cost ~2× (round-trip)
+        var walkableNbrs = 0;
+        var nbrDirs = [[-1,0],[1,0],[0,-1],[0,1]];
+        for (var nd = 0; nd < nbrDirs.length; nd++) {
+          var cnr = coinT.r + nbrDirs[nd][0], cnc = coinT.c + nbrDirs[nd][1];
+          if (cnr >= 0 && cnc >= 0 && cnr < rows && cnc < cols && isWalkableFog(fogMap[cnr][cnc]))
+            walkableNbrs++;
+        }
+        var effectiveDist = (walkableNbrs <= 2) ? distToCoin * 1.8 : distToCoin;
         var trapCount = 0;
         for (var ti = 0; ti < coinPath.length; ti++) {
           var tp = coinPath[ti];
@@ -944,7 +953,7 @@ function simulateFogOriginal(data) {
         // Pre-filter: never take a coin that loses money
         if (netValue <= 0) continue;
         // When exit unknown: require minimum per-step gain
-        var gainPerStep = netValue / Math.max(distToCoin, 1);
+        var gainPerStep = netValue / Math.max(effectiveDist, 1);
         if (!exitKnown && gainPerStep < 5.0) continue;
 
         // Coin ratio: collect coin, then to exit
@@ -953,7 +962,7 @@ function simulateFogOriginal(data) {
           var dijFromCoin = dijkstraFog(fogMap, coinT, triggeredTraps, 31);
           var ek2 = exitPos.r + "," + exitPos.c;
           var coinExitDist = (ek2 in dijFromCoin.dist) ? dijFromCoin.dist[ek2] : Infinity;
-          coinRatio = (coins + netValue) / Math.max(moveSteps + distToCoin + coinExitDist, 1);
+          coinRatio = (coins + netValue) / Math.max(moveSteps + effectiveDist + coinExitDist, 1);
         } else {
           coinRatio = gainPerStep; // use per-step gain as score when exit unknown
         }
@@ -1642,7 +1651,16 @@ function simulateLocalGreedy(data) {
 
         if (cell === "C" || cell === "G") {
           // Coin target (lines 127-131)
-          var coinScore = cfg.coin_value / Math.max(distanceCost, 1.0) - revisitPenalty;
+          // Dead-end penalty: coins in cul-de-sacs cost ~2× (round-trip)
+          var nbrs4 = [[-1,0],[1,0],[0,-1],[0,1]];
+          var walkableNbrs = 0;
+          for (var nd = 0; nd < nbrs4.length; nd++) {
+            var cnr = r + nbrs4[nd][0], cnc = c + nbrs4[nd][1];
+            if (cnr >= 0 && cnc >= 0 && cnr < fogMap.length && cnc < fogMap[0].length
+                && isWalkableFog(fogMap[cnr][cnc])) walkableNbrs++;
+          }
+          var effectiveDist = (walkableNbrs <= 2) ? distanceCost * 1.8 : distanceCost;
+          var coinScore = cfg.coin_value / Math.max(effectiveDist, 1.0) - revisitPenalty;
           if (shouldForceCollectB(knownBosses, coins, data.CoinConsumption || 5, cfg)) {
             coinScore += 20.0;
           }
@@ -1660,6 +1678,12 @@ function simulateLocalGreedy(data) {
     }
 
     // Frontier targets (lines 139-152)
+    // Suppress frontiers when exit is already visible (no need to explore further)
+    var exitVisible = false;
+    for (var er = 0; er < fogMap.length; er++) for (var ec = 0; ec < fogMap[0].length; ec++) {
+      if (fogMap[er][ec] === "E") { exitVisible = true; break; }
+    }
+    if (!exitVisible || !allBossesDefeated) {
     var frontiers = findFrontiersB(fogMap);
     for (var fi = 0; fi < frontiers.length; fi++) {
       var frontier = frontiers[fi];
@@ -1675,9 +1699,13 @@ function simulateLocalGreedy(data) {
       var fdistanceCost = dist[fk];
       var unknownCount = countUnknownNeighborsB(fogMap, frontier);
       var rawValue = cfg.frontier_value + cfg.frontier_unknown_weight * unknownCount;
-      var frontierScore = rawValue / Math.max(fdistanceCost, 1.0) - cfg.revisit_penalty * (visitCount[fk] || 0);
+      var frontierScore = rawValue / Math.max(fdistanceCost, 1.0) - 3.0 * (visitCount[fk] || 0);
+      // Penalize frontiers whose FIRST STEP goes through heavily-visited territory
+      var firstStepKey = keyOf(fmovePath[0]);
+      frontierScore -= 2.0 * (visitCount[firstStepKey] || 0);
       candidates.push(["frontier", frontier, frontierScore, fmovePath]);
     }
+    } // end exitVisible guard
 
     return candidates;
   }
@@ -1708,6 +1736,7 @@ function simulateLocalGreedy(data) {
     var bossCoinCost = 0;
     var bossSkillSequenceLengths = [];
     var bossSkillSequences = [];
+    var lastDir = null;  // direction momentum: {dr, dc} of last move
 
     // Initial reveal at start position so the first frame shows something
     revealFog(fogMap, groundTruth, pos, viewRadius);
@@ -1896,6 +1925,18 @@ function simulateLocalGreedy(data) {
         continue;
       }
 
+      // Direction momentum: reward frontiers that continue in the same direction
+      if (lastDir) {
+        for (var dmi = 0; dmi < candidates.length; dmi++) {
+          if (candidates[dmi][0] === "frontier" && candidates[dmi][3] && candidates[dmi][3].length > 0) {
+            var fs = candidates[dmi][3][0];
+            var fdr = fs.r - pos.r, fdc = fs.c - pos.c;
+            if (fdr === lastDir.dr && fdc === lastDir.dc) candidates[dmi][2] += 6.0;      // same direction: bonus
+            else if (fdr === -lastDir.dr && fdc === -lastDir.dc) candidates[dmi][2] -= 4.0; // reverse: penalty
+          }
+        }
+      }
+
       // Sort by score desc, pick best (port of decide() lines 81-84)
       candidates.sort(function (a, b) { return b[2] - a[2]; });
       var best = candidates[0];
@@ -1908,7 +1949,9 @@ function simulateLocalGreedy(data) {
       }
 
       // Take first step of best path (port of line 92)
-      pos = bestPath[0];
+      var newPos = bestPath[0];
+      lastDir = { dr: newPos.r - pos.r, dc: newPos.c - pos.c };
+      pos = newPos;
       stuckCount = 0;
     }
 
@@ -3567,6 +3610,88 @@ function simulateRatioAwareFogPlanner(data) {
     algorithm: "C_RATIO_AWARE_FOG_PLANNER"
   };
 }
+  // ============================================================
+  // Algorithm F: simulateFullMapReplay — full-map-knowledge A* replay
+  // Control group: upper bound of what Original could achieve with perfect info
+  // ============================================================
+  function simulateFullMapReplay(data) {
+    var groundTruth = cloneGrid(data.maze);
+    var rows = groundTruth.length, cols = groundTruth[0].length;
+
+    // 1. Plan optimal route with FULL map knowledge (same A* as buildPlannedRoute)
+    var planResult = buildPlannedRoute(groundTruth);
+    var planRoute = planResult.route;
+
+    // 2. Replay the plan: walk the route, apply cell effects
+    var coins = 0;
+    var rawPath = [];
+    var triggeredSet = new Set();
+    var bossDefeated = false;
+    var allBossesDefeated = (Array.isArray(data.B) ? data.B.length : 0) === 0;
+    var reachedExit = false;
+    var collectedCoins = [];
+    var triggeredTraps = [];
+    var bossTotalTurns = 0, bossReviveCount = 0, bossCoinCost = 0;
+    var bossSkillSeqLens = [], bossSkillSeqs = [];
+
+    for (var i = 0; i < planRoute.length; i++) {
+      var pos = planRoute[i];
+      var r = pos.r, c = pos.c;
+      rawPath.push([r, c]);
+      var cell = groundTruth[r][c];
+
+      if (cell === "C" || cell === "G") {
+        coins += COIN_VALUE;
+        collectedCoins.push([r, c]);
+        groundTruth[r][c] = " ";
+      } else if (cell === "T" && !triggeredSet.has(r + "," + c)) {
+        coins -= TRAP_DAMAGE;
+        triggeredSet.add(r + "," + c);
+        triggeredTraps.push([r, c]);
+        groundTruth[r][c] = " ";
+      } else if (cell === "B" && !bossDefeated) {
+        var br = runBossBattle(
+          Array.isArray(data.B) ? data.B.slice() : [],
+          data.PlayerSkills || [[8,4],[2,0],[4,2],[6,3]],
+          data.minRouds || 20, data.CoinConsumption || 5, coins
+        );
+        coins = br.coinsAfter;
+        bossTotalTurns = br.totalTurns || 0;
+        bossReviveCount = br.reviveCount || 0;
+        bossCoinCost = br.coinCost || 0;
+        if (br.skillSequenceLengths) bossSkillSeqLens = bossSkillSeqLens.concat(br.skillSequenceLengths);
+        if (br.skillSequences) bossSkillSeqs = bossSkillSeqs.concat(br.skillSequences);
+        bossDefeated = br.won;
+        allBossesDefeated = br.won;
+        groundTruth[r][c] = " ";
+        if (!br.won) break;
+      } else if (cell === "E" && allBossesDefeated) {
+        reachedExit = true;
+        break;
+      }
+    }
+
+    var deduped = [];
+    for (var dp = 0; dp < rawPath.length; dp++) {
+      if (dp === 0 || rawPath[dp][0] !== deduped[deduped.length - 1][0] || rawPath[dp][1] !== deduped[deduped.length - 1][1]) {
+        deduped.push(rawPath[dp]);
+      }
+    }
+    var finalSteps = Math.max(0, deduped.length - 1);
+    var ratio = (reachedExit && allBossesDefeated && finalSteps > 0) ? coins / finalSteps : 0;
+
+    return {
+      success: reachedExit && allBossesDefeated,
+      path: deduped, path_length: deduped.length, move_steps: finalSteps,
+      final_coin: coins, coin_step_ratio: ratio,
+      boss_success: allBossesDefeated, boss_total_turns: bossTotalTurns,
+      boss_revive_count: bossReviveCount, boss_coin_cost: bossCoinCost,
+      boss_skill_sequence_lengths: bossSkillSeqLens, boss_skill_sequences: bossSkillSeqs,
+      collectedCoins: collectedCoins, triggeredTraps: triggeredTraps,
+      algorithm: "F_FULL_MAP_REPLAY"
+    };
+  }
+
   // Comparison runner & UI integration
   // ============================================================
 
@@ -3577,7 +3702,7 @@ function simulateRatioAwareFogPlanner(data) {
     }
 
     var data = state.data;
-    var resultA, resultB, resultC, resultD, resultE;
+    var resultA, resultB, resultC, resultD, resultE, resultF;
 
     // Run Algorithm A (local 3x3 greedy)
     var startA = performance.now();
@@ -3604,6 +3729,11 @@ function simulateRatioAwareFogPlanner(data) {
     resultE = simulateOptimalPathReplay(data);
     var timeE = performance.now() - startE;
 
+    // Run Algorithm F (full-map-knowledge A* replay — upper bound control)
+    var startF = performance.now();
+    resultF = simulateFullMapReplay(data);
+    var timeF = performance.now() - startF;
+
     // Run fog-constrained Original (same A* planning, fogMap only)
     var startOrig = performance.now();
     var resultOrig = simulateFogOriginal(data);
@@ -3625,6 +3755,7 @@ function simulateRatioAwareFogPlanner(data) {
     if (resultC.coin_step_ratio > bestScore) { best = "C"; bestScore = resultC.coin_step_ratio; }
     if (resultD.coin_step_ratio > bestScore) { best = "D"; bestScore = resultD.coin_step_ratio; }
     if (resultE.coin_step_ratio > bestScore) { best = "E"; bestScore = resultE.coin_step_ratio; }
+    if (resultF.coin_step_ratio > bestScore) { best = "F"; bestScore = resultF.coin_step_ratio; }
     if (origScore > bestScore) { best = "original"; bestScore = origScore; }
 
     // Store results
@@ -3634,11 +3765,13 @@ function simulateRatioAwareFogPlanner(data) {
       algoC: resultC,
       algoD: resultD,
       algoE: resultE,
+      algoF: resultF,
       timeA: timeA,
       timeB: timeB,
       timeC: timeC,
       timeD: timeD,
       timeE: timeE,
+      timeF: timeF,
       timeOrig: timeOrig,
       algoOrig: resultOrig,
       origScore: origScore,
@@ -3711,6 +3844,9 @@ function simulateRatioAwareFogPlanner(data) {
     } else if (mode === "E") {
       output = state.compareResult.algoE;
       suffix = "_E";
+    } else if (mode === "F") {
+      output = state.compareResult.algoF;
+      suffix = "_F";
     } else {
       // Fog-constrained Original result
       if (state.compareResult.algoOrig && state.compareResult.algoOrig.path && state.compareResult.algoOrig.path.length > 0) {
@@ -3745,22 +3881,25 @@ function simulateRatioAwareFogPlanner(data) {
     var c = cr.algoC;
     var d = cr.algoD;
     var e = cr.algoE;
+    var f = cr.algoF;
     var cWrapped = { score: c.coin_step_ratio || 0, totalSteps: c.move_steps || 0, coins: c.final_coin || 0, bossDefeated: c.boss_success ? 1 : 0 };
     var dWrapped = { score: d.coin_step_ratio || 0, totalSteps: d.move_steps || 0, coins: d.final_coin || 0, bossDefeated: d.boss_success ? 1 : 0 };
     var eWrapped = { score: e.coin_step_ratio || 0, totalSteps: e.move_steps || 0, coins: e.final_coin || 0, bossDefeated: e.boss_success ? 1 : 0 };
+    var fWrapped = { score: f.coin_step_ratio || 0, totalSteps: f.move_steps || 0, coins: f.final_coin || 0, bossDefeated: f.boss_success ? 1 : 0 };
     var bestOverall = cr.bestOverall || "B";
     var winnerA = bestOverall === "A";
     var winnerB = bestOverall === "B";
     var winnerC = bestOverall === "C";
     var winnerD = bestOverall === "D";
     var winnerE = bestOverall === "E";
+    var winnerF = bestOverall === "F";
     var winnerOrig = bestOverall === "original";
 
     panel.innerHTML =
       '<div class="compare-header">' +
         '<span class="compare-header-kicker">ALGORITHM ARENA</span>' +
         '<span class="compare-header-title">Algorithm Comparison</span>' +
-        '<span class="compare-header-sub">6-way comparison • Best algorithm auto-displayed</span>' +
+        '<span class="compare-header-sub">7-way comparison • Best algorithm auto-displayed</span>' +
       '</div>' +
       '<div class="compare-cards">' +
         buildCompareCard("A", "Algorithm A · Pure 3x3 Local Greedy", a, cr.timeA, winnerA, "Only sees 3x3 window, O(1)/step") +
@@ -3773,6 +3912,8 @@ function simulateRatioAwareFogPlanner(data) {
         '<div class="compare-vs"><span>VS</span><i class="compare-vs-diamond"></i></div>' +
         buildCompareCard("E", "Algorithm E · Optimal Path Replay", eWrapped, cr.timeE, winnerE, "Map detection + pre-computed optimal path, O(1)/step") +
         '<div class="compare-vs"><span>VS</span><i class="compare-vs-diamond"></i></div>' +
+        buildCompareCard("F", "Algorithm F · Full Map A* Replay", fWrapped, cr.timeF, winnerF, "Full map A* path + real boss combat, O(N log N)") +
+        '<div class="compare-vs"><span>VS</span><i class="compare-vs-diamond"></i></div>' +
         buildOriginalCard(cr, winnerOrig) +
       '</div>' +
       '<div class="compare-actions">' +
@@ -3781,6 +3922,7 @@ function simulateRatioAwareFogPlanner(data) {
         '<button class="secondary-btn" data-compare-view="C"><span class="compare-action-mark">★</span>View Algo C Path</button>' +
         '<button class="secondary-btn" data-compare-view="D"><span class="compare-action-mark">⬥</span>View Algo D Path</button>' +
         '<button class="secondary-btn" data-compare-view="E"><span class="compare-action-mark">⬡</span>View Algo E Path</button>' +
+        '<button class="secondary-btn" data-compare-view="F"><span class="compare-action-mark">⬢</span>View Algo F Path</button>' +
         '<button class="secondary-btn" data-compare-view="original"><span class="compare-action-mark">◇</span>View Original Plan</button>' +
         '<hr style="border-color:var(--line);margin:4px 0;opacity:0.5">' +
         '<div style="font-size:11px;color:var(--muted);margin-bottom:4px;">Download output_result.json:</div>' +
@@ -3790,6 +3932,7 @@ function simulateRatioAwareFogPlanner(data) {
           '<button class="secondary-btn" data-download-output="C">C</button>' +
           '<button class="secondary-btn" data-download-output="D">D</button>' +
           '<button class="secondary-btn" data-download-output="E">E</button>' +
+          '<button class="secondary-btn" data-download-output="F">F</button>' +
           '<button class="secondary-btn" data-download-output="original">Orig</button>' +
         '</div>' +
       '</div>';
@@ -3877,6 +4020,9 @@ function simulateRatioAwareFogPlanner(data) {
     } else if (mode === "E") {
       result = state.compareResult.algoE;
       label = "Algorithm E (Optimal Replay)";
+    } else if (mode === "F") {
+      result = state.compareResult.algoF;
+      label = "Algorithm F (Full Map Replay)";
     } else {
       // Original: fog-constrained A* planner
       result = state.compareResult.algoOrig;
@@ -3915,6 +4061,17 @@ function simulateRatioAwareFogPlanner(data) {
         eFrames.push({round:ei,pos:{r:ep[0],c:ep[1]},coins:eCoins,bossCount:0,phase:"探索中",event:"",sourceCell:state.data.maze[ep[0]][ep[1]],bossEncounter:null,grid:cloneGrid(eGrid),revealed:new Set(eRevealed),heat:[],exploredRatio:eRevealed.size/(eRows*eCols)});
       }
       state.frames = eFrames; state.route = eFrames.map(function(f){return f.pos;});
+    } else if (mode === "F") {
+      var fGrid2 = cloneGrid(state.data.maze);
+      var fFrames2 = []; var fCoins2 = 0; var fRevealed2 = new Set();
+      var fRows2 = state.data.maze.length; var fCols2 = state.data.maze[0].length;
+      for (var fi2 = 0; fi2 < result.path.length; fi2++) {
+        var fp2 = result.path[fi2]; var fc2 = state.data.maze[fp2[0]][fp2[1]];
+        for (var frr2=-1;frr2<=1;frr2++) for (var fcc2=-1;fcc2<=1;fcc2++) { var fr22=fp2[0]+frr2,fc22=fp2[1]+fcc2; if(fr22>=0&&fc22>=0&&fr22<fRows2&&fc22<fCols2)fRevealed2.add(fr22+","+fc22); }
+        if(fi2>0&&(fc2==="C"||fc2==="G")){fCoins2+=50;fGrid2[fp2[0]][fp2[1]]=" ";}else if(fi2>0&&fc2==="T"){fCoins2-=30;fGrid2[fp2[0]][fp2[1]]=" ";}else if(fi2>0&&fc2==="B"){fGrid2[fp2[0]][fp2[1]]=" ";}
+        fFrames2.push({round:fi2,pos:{r:fp2[0],c:fp2[1]},coins:fCoins2,bossCount:0,phase:"探索中",event:"",sourceCell:state.data.maze[fp2[0]][fp2[1]],bossEncounter:null,grid:cloneGrid(fGrid2),revealed:new Set(fRevealed2),heat:[],exploredRatio:fRevealed2.size/(fRows2*fCols2)});
+      }
+      state.frames = fFrames2; state.route = fFrames2.map(function(f){return f.pos;});
     } else if (mode === "D") {
       var dGrid = cloneGrid(state.data.maze);
       var dFrames = [];
@@ -3987,7 +4144,7 @@ function simulateRatioAwareFogPlanner(data) {
     els.timeline.max = String(Math.max(0, state.frames.length - 1));
     els.timeline.value = "0";
     state._compareViewScore = (mode === "A" || mode === "B") ? result.score
-      : (mode === "C" || mode === "D" || mode === "E") ? result.coin_step_ratio : null;
+      : (mode === "C" || mode === "D" || mode === "E" || mode === "F") ? result.coin_step_ratio : null;
     // Update label and display: "Route: N" → "总分/步: X.XX"
     if (state._compareViewScore !== null) {
       if (els.metricRouteLabel) els.metricRouteLabel.textContent = "总分/步";
