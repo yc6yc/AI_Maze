@@ -1,1 +1,1 @@
-# agents package - 各角色智能体
+"""Decision agents for AI Maze."""

@@ -1,398 +1,141 @@
-"""
-global_planner.py — 全局迷宫探索与路径规划（重构版）
-负责人：角色3（算法B）
-----------------------------------------------------
-评价指标：总价值 / 总步数
-  总价值 = 金币数×50 - 陷阱×30 - 挑战失败次数×CoinConsumption
-
-核心矛盾：
-  步数宝贵，但金币缓冲不足 → 失败后大量回头路 → 总价值/步数双重受损
-  → 策略：提前囤够 retry_buffer 次重试的金币，再快速冲向 BOSS
-
-五阶段状态机：
-  ┌─────────────────────────────────────────────────────────┐
-  │  EXPLORE      探索地图，顺路收集金币，主要目标：发现 BOSS  │
-  │     ↓ 发现 BOSS 且金币 < 缓冲目标                        │
-  │  COLLECT      专项补充金币至 retry_buffer×CoinConsumption │
-  │     ↓ 金币充足（或 EXPLORE 时即满足）                     │
-  │  RUSH_TO_BOSS 快速导航至 BOSS 格，由 CombatAgent 接管战斗 │
-  │     ↓ 所有 BOSS 击败（fog_map 中 B 消失）                 │
-  │  RUSH_TO_EXIT 冲向终点 E                                  │
-  │     ↓ 挑战失败 & 金币 < CoinConsumption                   │
-  │  RETRY_COLLECT 补充至够 1 次重试，再回 RUSH_TO_BOSS        │
-  └─────────────────────────────────────────────────────────┘
-
-BOSS 战失败检测（AI 侧启发式）：
-  - ctx.player.coins 骤降（降幅 ≈ CoinConsumption）且仍在 RUSH_TO_BOSS
-  - 或走迷宫总步数接近 max_rounds 仍未切换到 RUSH_TO_EXIT
-
-minRounds 说明（来自服务器输入）：
-  minRounds 是 BOSS 战内部的最大攻击轮数，每轮使用一个技能攻击 BOSS（BOSS 不反击）。
-  若在 minRounds 轮内未击败 BOSS，则挑战失败，扣除 CoinConsumption 枚金币，
-  已击败部分 BOSS 的血量将对玩家可见，可继续重试。
-  minRounds 与走迷宫的步数（round_num）完全无关。
-"""
-
 from __future__ import annotations
-from enum import Enum, auto
-from typing import List, Optional, Tuple
 
-from agents.base_agent import BaseAgent
-from core.state import (
-    GameContext, Action, MazeState,
-    CELL_TRAP, CELL_COIN, CELL_GOLD, CELL_BOSS,
-)
-from core.pathfinding import astar, bfs, dijkstra, extract_path
+from dataclasses import dataclass
+from enum import Enum
+from math import inf
 
-DEFAULT_CONFIG = {
-    "w_coin": 2.0,
-    "w_trap": 1.5,
-    "retry_buffer": 3,          # 预留 N 次重试所需金币（N × CoinConsumption）
-    "min_explore_ratio": 0.4,   # 至少探索此比例格子才允许提前切到 RUSH_TO_BOSS
-    "rush_round_threshold": 50, # 走迷宫总步数（round_num）距 max_rounds 不足此值时强制冲 BOSS
-    "trap_step_cost": 31,       # Dijkstra 中陷阱格的额外代价（超过则绕路更划算）
-}
+from core.pathfinding import astar, bfs, dijkstra, reconstruct_path
+from core.state import COIN_CELLS, Action, GameContext, Position, delta_to_move
 
-Pos = Tuple[int, int]
+from .base import BaseAgent
 
 
-class Phase(Enum):
-    EXPLORE       = auto()   # 探索地图，顺路拾取
-    COLLECT       = auto()   # 专项补充金币到缓冲目标
-    RUSH_TO_BOSS  = auto()   # 冲向 BOSS 战
-    RUSH_TO_EXIT  = auto()   # 所有 BOSS 击败后冲终点
-    RETRY_COLLECT = auto()   # 挑战失败后金币不足，补充后重试
+class PlannerPhase(str, Enum):
+    EXPLORE = "EXPLORE"
+    COLLECT = "COLLECT"
+    RUSH_TO_BOSS = "RUSH_TO_BOSS"
+    RUSH_TO_EXIT = "RUSH_TO_EXIT"
+    RETRY_COLLECT = "RETRY_COLLECT"
+
+
+@dataclass
+class GlobalPlannerConfig:
+    trap_step_cost: float = 31.0
+    boss_coin_threshold: int = 0
+    explore_ratio_before_boss: float = 0.18
 
 
 class GlobalPlannerAgent(BaseAgent):
+    def __init__(self, config: dict | None = None) -> None:
+        values = config or {}
+        allowed = {k: v for k, v in values.items() if hasattr(GlobalPlannerConfig, k)}
+        self.config = GlobalPlannerConfig(**allowed)
+        self.phase = PlannerPhase.EXPLORE
+        self.known_bosses: set[Position] = set()
+        self._last_coins: int | None = None
 
-    def __init__(self, config: dict = None):
-        super().__init__(name="GlobalPlannerAgent")
-        self.cfg = {**DEFAULT_CONFIG, **(config or {})}
-        self.phase: Phase = Phase.EXPLORE
-        self._path: List[Pos] = []
-
-        # 内部追踪量
-        self._known_boss_pos: Optional[Pos] = None   # 当前追踪的 BOSS 位置（从列表中选一个）
-        self._all_boss_pos: List[Pos] = []           # fog_map 中已发现的全部 BOSS 位置
-        self._prev_coin: int = 0                     # 上回合金币数，用于检测失败扣款
-        self._prev_boss_count: int = 0               # 上回合已击败 BOSS 数
-
-    def on_episode_start(self, ctx: GameContext):
-        self.phase = Phase.EXPLORE
-        self._path = []
-        self._known_boss_pos = None
-        self._all_boss_pos = []
-        self._prev_coin = ctx.player.coins
-        self._prev_boss_count = 0
-
-    # ------------------------------------------------------------------ #
-    # 主接口
-    # ------------------------------------------------------------------ #
     def decide(self, ctx: GameContext) -> Action:
-        self._scan_boss(ctx.maze)          # 更新已知 BOSS 位置
-        self._detect_failure(ctx)          # 检测是否刚刚挑战失败
-        self._detect_boss_defeated(ctx)    # 检测是否所有 BOSS 已被击败
-        self._update_phase(ctx)            # 状态机切换
+        self._update_memory(ctx)
+        self._select_phase(ctx)
 
-        if not self._path or not ctx.maze.is_walkable(*self._path[0]):
-            self._replan(ctx)
+        path: list[Position] = []
+        if self.phase == PlannerPhase.RUSH_TO_EXIT:
+            path = astar(ctx.maze, ctx.player.pos, ctx.maze.end, cost_fn=self._cost(ctx))
+        elif self.phase == PlannerPhase.RUSH_TO_BOSS:
+            path = self._path_to_nearest(ctx, self._available_bosses(ctx), weighted=True)
+        elif self.phase in {PlannerPhase.COLLECT, PlannerPhase.RETRY_COLLECT}:
+            path = self._path_to_nearest(ctx, self._coins(ctx), weighted=True)
+            if not path:
+                path = self._path_to_frontier(ctx)
+        else:
+            path = self._path_to_frontier(ctx)
+            if not path:
+                path = self._path_to_nearest(ctx, self._coins(ctx), weighted=True)
 
-        if not self._path:
-            return Action(move="STAY")
+        return self._action_from_path(ctx.player.pos, path)
 
-        next_pos = self._path.pop(0)
-        self._prev_coin = ctx.player.coins
-        self._prev_boss_count = len(ctx.boss_defeated)
-        return Action(move=_pos_to_move(ctx.player.pos, next_pos))
+    def _update_memory(self, ctx: GameContext) -> None:
+        for pos, cell in ctx.maze.known_cells():
+            if cell == "B" and pos not in ctx.maze.defeated_bosses:
+                self.known_bosses.add(pos)
+        if self._last_coins is not None and ctx.player.coins < self._last_coins and self.phase == PlannerPhase.RUSH_TO_BOSS:
+            self.phase = PlannerPhase.RETRY_COLLECT
+        self._last_coins = ctx.player.coins
 
-    # ------------------------------------------------------------------ #
-    # 事件检测
-    # ------------------------------------------------------------------ #
-    def _scan_boss(self, maze: MazeState):
-        """
-        从 fog_map 中扫描全部 BOSS 格子位置，支持多 BOSS 地图。
-        - 已发现的 BOSS 若格子内容变化（被击败）则从列表移除
-        - 从剩余列表中选距离当前 _known_boss_pos 最近的作为当前目标
-          （简化为选列表第一个）
-        """
-        # 清理已被击败的 BOSS
-        self._all_boss_pos = [
-            (r, c) for (r, c) in self._all_boss_pos
-            if maze.fog_map[r][c] == CELL_BOSS
-        ]
-        # 扫描新出现的 BOSS
-        for r in range(maze.rows):
-            for c in range(maze.cols):
-                if maze.fog_map[r][c] == CELL_BOSS and (r, c) not in self._all_boss_pos:
-                    self._all_boss_pos.append((r, c))
-
-        # 更新当前目标 BOSS：若当前目标已消失则换下一个
-        if self._known_boss_pos is not None:
-            if maze.fog_map[self._known_boss_pos[0]][self._known_boss_pos[1]] != CELL_BOSS:
-                self._known_boss_pos = None
-        if self._known_boss_pos is None and self._all_boss_pos:
-            self._known_boss_pos = self._all_boss_pos[0]
-
-    def _detect_failure(self, ctx: GameContext):
-        """
-        BOSS 挑战失败检测（启发式）：
-        金币相比上回合减少约 CoinConsumption，且 BOSS 仍未被击败。
-        """
-        cc = ctx.coin_consumption
-        if cc <= 0:
-            return
-        coin_drop = self._prev_coin - ctx.player.coins
-        # 金币骤降 ≈ CoinConsumption 且不是正常拾取导致（拾取会增加金币）
-        if coin_drop >= cc * 0.8 and self.phase == Phase.RUSH_TO_BOSS:
-            # 挑战失败，检查是否还有足够金币
-            if ctx.player.coins < cc:
-                self.phase = Phase.RETRY_COLLECT
-                self._path = []
-
-    def _detect_boss_defeated(self, ctx: GameContext):
-        """
-        所有 BOSS 击败检测：
-        - fog_map 中所有已知 BOSS 格均消失（_all_boss_pos 为空）且曾击败过至少一个
-        - 或 boss_defeated 增长后 BFS 确认终点无阻断
-        """
-        if self.phase == Phase.RUSH_TO_EXIT:
-            return
-        # 多 BOSS 支持：所有已发现的 BOSS 都消失 + 曾击败过至少一个
-        if len(self._all_boss_pos) == 0 and len(ctx.boss_defeated) > 0:
-            self.phase = Phase.RUSH_TO_EXIT
-            self._path = []
-            return
-        # 备用：boss_defeated 增长后尝试 BFS 到终点，若无阻断则切换
-        if (len(ctx.boss_defeated) > self._prev_boss_count
-                and ctx.maze.end is not None):
-            path = bfs(ctx.maze, ctx.player.pos, ctx.maze.end)
-            if path is not None:
-                self.phase = Phase.RUSH_TO_EXIT
-                self._path = []
-
-    # ------------------------------------------------------------------ #
-    # 阶段切换
-    # ------------------------------------------------------------------ #
-    def _update_phase(self, ctx: GameContext):
-        # RUSH_TO_EXIT 不可逆
-        if self.phase == Phase.RUSH_TO_EXIT:
-            return
-
-        coins = ctx.player.coins
-        cc = ctx.coin_consumption
-        buf = self.cfg["retry_buffer"]
-        target_coins = buf * cc if cc > 0 else 0   # 缓冲目标金币数
-
-        # RETRY_COLLECT：凑够 1 次重试即可
-        if self.phase == Phase.RETRY_COLLECT:
-            if coins >= cc:
-                self.phase = Phase.RUSH_TO_BOSS
-                self._path = []
-            return
-
-        # 时间压力：走迷宫总步数接近 max_rounds 上限时，强制冲 BOSS
-        # 注意：min_rounds 是 BOSS 战的攻击轮数限制，与 round_num 无关
-        max_rounds = self.cfg.get("max_rounds", 500)
-        steps_left = max_rounds - ctx.player.round_num
-        if steps_left <= self.cfg["rush_round_threshold"] and self._known_boss_pos:
-            if self.phase not in (Phase.RUSH_TO_BOSS,):
-                self.phase = Phase.RUSH_TO_BOSS
-                self._path = []
-            return
-
-        boss_known = self._known_boss_pos is not None
-
-        # 计算已探索比例（用于防止太早放弃探索）
-        total = ctx.maze.rows * ctx.maze.cols
-        explored = sum(
-            1 for r in range(ctx.maze.rows)
-            for c in range(ctx.maze.cols)
-            if ctx.maze.fog_map[r][c] is not None
-        )
-        explore_ratio = explored / total
-
-        coin_ready = coins >= target_coins
-        explored_enough = explore_ratio >= self.cfg["min_explore_ratio"]
-
-        if self.phase in (Phase.EXPLORE, Phase.COLLECT):
-            if boss_known and coin_ready and explored_enough:
-                # 金币充足 + 已发现 BOSS + 探索充分 → 冲 BOSS
-                self.phase = Phase.RUSH_TO_BOSS
-                self._path = []
-            elif boss_known and not coin_ready:
-                # 已知 BOSS 在哪但金币不够 → 专项收集
-                self.phase = Phase.COLLECT
-            # else: 继续探索（还没找到 BOSS，或金币已足但探索不够）
-
-    # ------------------------------------------------------------------ #
-    # 重新规划路径
-    # ------------------------------------------------------------------ #
-    def _replan(self, ctx: GameContext):
-        pos = ctx.player.pos
-        maze = ctx.maze
-
-        if self.phase == Phase.RUSH_TO_EXIT:
-            # 直冲终点，时间优先，不考虑陷阱代价
-            self._path = self._plan_path(pos, maze.end, maze, avoid_traps=False)
-            return
-
-        if self.phase == Phase.RUSH_TO_BOSS:
-            goal = self._known_boss_pos
-            if goal is None:
-                # BOSS 未发现，回退到探索
-                self.phase = Phase.EXPLORE
-                self._replan(ctx)
+    def _select_phase(self, ctx: GameContext) -> None:
+        if len(ctx.maze.defeated_bosses) >= len(self.known_bosses) and self._exit_known(ctx):
+            if not self._available_bosses(ctx):
+                self.phase = PlannerPhase.RUSH_TO_EXIT
                 return
-            # 冲 BOSS 时用 Dijkstra 权衡绕路 vs 踩陷阱
-            self._path = self._plan_path(pos, goal, maze, avoid_traps=True)
+        if self._available_bosses(ctx):
+            if ctx.player.coins >= self.config.boss_coin_threshold and self._explore_ratio(ctx) >= self.config.explore_ratio_before_boss:
+                self.phase = PlannerPhase.RUSH_TO_BOSS
+            else:
+                self.phase = PlannerPhase.COLLECT if self._coins(ctx) else PlannerPhase.EXPLORE
             return
+        self.phase = PlannerPhase.EXPLORE
 
-        if self.phase == Phase.EXPLORE:
-            # EXPLORE 阶段：用 BFS 找最近的前沿格子（已知可行且有未知邻居）
-            # BFS 只在已知格子中扩展，天然适配 fog_map，不会走入 None 区域
-            path = self._bfs_to_frontier(pos, maze)
-            if path is None:
-                # 已知区域内无前沿，转收集
-                self.phase = Phase.COLLECT
-                self._replan(ctx)
-                return
-            self._path = path
-            return
-
-        if self.phase in (Phase.COLLECT, Phase.RETRY_COLLECT):
-            goal = self._best_coin_target(pos, maze)
-            if goal is None:
-                # 地图内无金币 → 只能硬冲 BOSS
-                self.phase = Phase.RUSH_TO_BOSS
-                self._replan(ctx)
-                return
-            # 收集金币时用 Dijkstra 权衡绕路 vs 踩陷阱
-            self._path = self._plan_path(pos, goal, maze, avoid_traps=True)
-
-    # ------------------------------------------------------------------ #
-    # 工具
-    # ------------------------------------------------------------------ #
-    def _plan_path(
-        self,
-        pos: Pos,
-        goal: Optional[Pos],
-        maze: MazeState,
-        avoid_traps: bool,
-    ) -> List[Pos]:
-        """
-        路径规划统一入口。
-
-        avoid_traps=False：直接用 A* （步数最短，不考虑陷阱）
-        avoid_traps=True ：用 Dijkstra + 陷阱代价权重，自动权衡
-                          绕路代价 vs 踩陷阱代价，无需降级重试
-        """
-        if goal is None:
+    def _path_to_frontier(self, ctx: GameContext) -> list[Position]:
+        dist = bfs(ctx.maze, ctx.player.pos)
+        if not isinstance(dist, dict):
             return []
+        frontiers = [pos for pos in dist if self._unknown_neighbor(ctx, pos)]
+        if not frontiers:
+            return []
+        goal = min(frontiers, key=lambda pos: dist[pos])
+        path = bfs(ctx.maze, ctx.player.pos, goal)
+        return path if isinstance(path, list) else []
 
-        if not avoid_traps:
-            path = astar(maze, pos, goal)
-            return path[1:] if path else []
+    def _path_to_nearest(self, ctx: GameContext, targets: list[Position], *, weighted: bool = False) -> list[Position]:
+        if not targets:
+            return []
+        if weighted:
+            dist, came_from = dijkstra(ctx.maze, ctx.player.pos, cost_fn=self._cost(ctx))
+            reachable = [target for target in targets if target in dist]
+            if not reachable:
+                return []
+            goal = min(reachable, key=lambda pos: dist[pos])
+            return reconstruct_path(came_from, ctx.player.pos, goal)
+        best_path: list[Position] = []
+        best_len = inf
+        for target in targets:
+            path = bfs(ctx.maze, ctx.player.pos, target)
+            if isinstance(path, list) and path and len(path) < best_len:
+                best_path = path
+                best_len = len(path)
+        return best_path
 
-        # Dijkstra：陷阱格代价 = 1（步数） + trap_step_cost（金币掃分）
-        trap_cost = self.cfg["trap_step_cost"]
+    def _action_from_path(self, cur: Position, path: list[Position]) -> Action:
+        if len(path) < 2:
+            return Action()
+        nxt = path[1]
+        return Action(move=delta_to_move((nxt[0] - cur[0], nxt[1] - cur[1])))
 
-        def weight_fn(r: int, c: int) -> float:
-            cell = maze.fog_map[r][c]
-            if cell == CELL_TRAP and (r, c) not in maze.triggered_traps:
-                return 1.0 + trap_cost   # 踩陷阱代价高
-            return 1.0                   # 普通格子代价=1步
+    def _cost(self, ctx: GameContext):
+        def cost(pos: Position) -> float:
+            cell = ctx.maze.cell(pos)
+            if cell == "T" and pos not in ctx.maze.triggered_traps:
+                return 1.0 + self.config.trap_step_cost
+            return 1.0
 
-        dist, prev = dijkstra(maze, pos, goal=goal, weight_fn=weight_fn)
-        path = extract_path(prev, pos, goal)
-        return path[1:] if path else []
+        return cost
 
-    def _bfs_to_frontier(self, pos: Pos, maze: MazeState) -> Optional[List[Pos]]:
-        """
-        BFS 在已知格子中扩展，找到最近的「前沿格子」并返回到达该格的完整路径。
+    def _coins(self, ctx: GameContext) -> list[Position]:
+        return [pos for pos, cell in ctx.maze.known_cells() if cell in COIN_CELLS]
 
-        前沿格子：已知可行且至少有一个 fog_map==None 的直接邻居。
-        站在前沿格上行动才能揭露未知邻居，因此路径必须包含前沿格本身。
+    def _available_bosses(self, ctx: GameContext) -> list[Position]:
+        return sorted(pos for pos in self.known_bosses if pos not in ctx.maze.defeated_bosses and ctx.maze.cell(pos) == "B")
 
-        队列元素：(cur_pos, path_到达cur_pos_不含起点)
-        Bug 修复：
-          1. 前沿检测使用 cur 坐标（之前误用了外层 BFS 函数参数 pos 的 r,c）
-          2. 路径中加入 cur 本身后再返回，避免起点是前沿时返回空列表导致 STAY 死锁
-        """
-        from collections import deque
-        bfs_visited = {pos}
-        # 队列元素：(cur_pos, path_到_cur_不含起点)
-        queue = deque([(pos, [])])
+    def _exit_known(self, ctx: GameContext) -> bool:
+        return ctx.maze.cell(ctx.maze.end) == "E"
 
-        while queue:
-            cur, path = queue.popleft()
-            cr, cc = cur   # ← 修复1：使用当前节点坐标，而非起点坐标
+    def _unknown_neighbor(self, ctx: GameContext, pos: Position) -> bool:
+        r, c = pos
+        for nxt in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+            if ctx.maze.in_bounds(nxt) and ctx.maze.cell(nxt) is None:
+                return True
+        return False
 
-            # 检查 cur 是否是前沿格（有任意未探索的直接邻居）
-            for nr, nc in maze.neighbors(cr, cc):
-                if maze.fog_map[nr][nc] is None:
-                    # 修复2：path 不含 cur，需要把 cur 追加进去再返回
-                    return path + [cur]
-
-            # 向已知可行格子扩展
-            for nr, nc in maze.neighbors(cr, cc):
-                nxt = (nr, nc)
-                if nxt not in bfs_visited and maze.is_walkable(nr, nc):
-                    bfs_visited.add(nxt)
-                    queue.append((nxt, path + [nxt]))
-
-        return None  # 已知区域内无前沿（全图已探索）
-
-    def _nearest_frontier(self, pos: Pos, maze: MazeState) -> Optional[Pos]:
-        """保留兼容，返回前沿格子坐标（不含路径）"""
-        path = self._bfs_to_frontier(pos, maze)
-        return path[-1] if path else None
-
-    def _best_coin_target(self, pos: Pos, maze: MazeState) -> Optional[Pos]:
-        """
-        收益最高的金币目标：用 BFS 实际路径距离计算性价比。
-
-        旧版用曼哈顿距离估算，迫路时会选到实际要绕很远路的目标。
-        BFS 距离 = 过已知格子的最短路径步数（不走入黑雾区域）。
-        """
-        from collections import deque
-
-        # 先收集所有金币位置
-        coin_cells = [
-            (r, c)
-            for r in range(maze.rows)
-            for c in range(maze.cols)
-            if maze.fog_map[r][c] in (CELL_COIN, CELL_GOLD)
-        ]
-        if not coin_cells:
-            return None
-
-        # 一次 BFS 计算从 pos 到已知可达格子的最短距离
-        dist_map: dict = {pos: 0}
-        queue = deque([pos])
-        while queue:
-            cur = queue.popleft()
-            for nr, nc in maze.neighbors(*cur):
-                nxt = (nr, nc)
-                if nxt not in dist_map and maze.is_walkable(nr, nc):
-                    dist_map[nxt] = dist_map[cur] + 1
-                    queue.append(nxt)
-
-        best_score, best_pos = -1e9, None
-        for (r, c) in coin_cells:
-            bfs_dist = dist_map.get((r, c))
-            if bfs_dist is None:
-                continue  # 该金币目前不可达（封閉在未探索区）
-            score = self.cfg["w_coin"] * 50 / (bfs_dist + 1)
-            if score > best_score:
-                best_score, best_pos = score, (r, c)
-        return best_pos
-
-def _pos_to_move(src: Pos, dst: Pos) -> str:
-    dr = dst[0] - src[0]
-    dc = dst[1] - src[1]
-    if dr == -1: return "UP"
-    if dr ==  1: return "DOWN"
-    if dc == -1: return "LEFT"
-    if dc ==  1: return "RIGHT"
-    return "STAY"
+    def _explore_ratio(self, ctx: GameContext) -> float:
+        known = sum(1 for _pos, _cell in ctx.maze.known_cells())
+        return known / max(ctx.maze.rows * ctx.maze.cols, 1)

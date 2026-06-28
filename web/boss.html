@@ -1,159 +1,23 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI Boss Battle</title>
-<link rel="stylesheet" href="./styles.css">
-<link rel="stylesheet" href="./boss.css">
-</head>
-<body class="boss-page">
-
-<!-- Atmospheric Background -->
-<div id="void-bg"></div>
-<div id="scanlines"></div>
-<div id="chroma"></div>
-<div id="particles"></div>
-
-<!-- ===== MAIN BATTLE VIEW ===== -->
-<main class="battle-shell">
-
-  <!-- TOP BAR -->
-  <header class="battle-header">
-    <div class="battle-brand">
-      <span class="battle-title">BOSS BATTLE</span>
-      <span id="battleName" class="battle-map-name">maze_15_15.json</span>
-    </div>
-    <div class="battle-status">
-      <span id="runState" class="status-badge">Standby</span>
-      <span id="phaseLabel" class="phase-badge">初始化</span>
-    </div>
-  </header>
-
-  <!-- BATTLE ARENA -->
-  <section class="battle-arena">
-
-    <!-- LEFT: Player -->
-    <aside class="actor-panel actor-player">
-      <div class="actor-frame">
-        <img src="./assets/leaper_idle.png" class="actor-svg actor-leaper" alt="Drifter" draggable="false">
-        <div class="actor-label">
-          <span class="actor-name">DRIFTER</span>
-          <span id="playerHp" class="actor-hp">Coins: --</span>
-        </div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Boss Battle</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body class="boss-page">
+    <section class="battlefield">
+      <canvas id="bossCanvas"></canvas>
+      <div id="playerActor" class="actor player-actor"></div>
+      <div id="bossActor" class="actor boss-actor"></div>
+      <div id="damageText" class="damage-text"></div>
+      <div class="battle-hud">
+        <span id="battlePhase">ready</span>
+        <strong id="bossHp">0</strong>
       </div>
-    </aside>
-
-    <!-- CENTER: Maze + Combat Stage -->
-    <section class="stage-panel">
-      <div class="maze-frame">
-        <canvas id="mazeCanvas" aria-label="迷宫地图"></canvas>
-      </div>
-      <div class="combat-overlay" id="combatOverlay">
-        <div class="skill-effect" id="skillEffect"></div>
-        <div class="damage-text" id="damageText"></div>
-      </div>
+      <ol id="battleLog" class="battle-log"></ol>
     </section>
-
-    <!-- RIGHT: Boss -->
-    <aside class="actor-panel actor-boss">
-      <div class="actor-frame">
-        <img src="./assets/boss_awaken.png" class="actor-svg actor-boss-anim" alt="Judgement" draggable="false">
-        <div class="actor-label">
-          <span class="actor-name">JUDGEMENT</span>
-          <span id="bossHp" class="actor-hp">HP: --</span>
-        </div>
-      </div>
-    </aside>
-
-  </section>
-
-  <!-- BOTTOM: Controls -->
-  <footer class="battle-controls">
-    <div class="control-group">
-      <button id="resetBtn" type="button" class="ctrl-btn" aria-label="Reset">↺</button>
-      <button id="prevBtn" type="button" class="ctrl-btn" aria-label="Prev">◀</button>
-      <button id="playBtn" type="button" class="ctrl-btn primary" aria-label="Play/Pause">▶</button>
-      <button id="nextBtn" type="button" class="ctrl-btn" aria-label="Next">▶</button>
-    </div>
-    <div class="timeline-group">
-      <input id="timeline" type="range" min="0" max="0" value="0">
-      <span id="frameCounter" class="frame-counter">0 / 0</span>
-    </div>
-    <div class="speed-group">
-      <label>Speed</label>
-      <input id="speedRange" type="range" min="1" max="12" value="5">
-      <output id="speedLabel">5x</output>
-    </div>
-  </footer>
-
-</main>
-
-<!-- DATA PANEL TOGGLE -->
-<button id="dataToggleBtn" type="button" class="data-toggle" aria-label="Toggle data panel">
-  <span>DATA</span>
-</button>
-
-<!-- DATA PANEL (Hidden by default) -->
-<aside id="dataPanel" class="data-panel hidden">
-  <div class="data-panel-header">
-    <span class="data-title">Combat Data</span>
-    <button id="closeDataBtn" type="button" class="close-btn" aria-label="Close">×</button>
-  </div>
-  <div class="data-panel-body">
-    <section class="data-section">
-      <h3>Metrics</h3>
-      <div class="data-grid">
-        <div><span>Boss</span><strong id="metricBoss">0/0</strong></div>
-        <div><span>Attempt</span><strong id="metricAttempt">0</strong></div>
-        <div><span>Round</span><strong id="metricRound">0</strong></div>
-        <div><span>Coins</span><strong id="metricCoins">0</strong></div>
-      </div>
-    </section>
-    <section class="data-section">
-      <h3>Current Round</h3>
-      <dl class="detail-list">
-        <div><dt>Boss</dt><dd id="detailBoss">-</dd></div>
-        <div><dt>Attempt</dt><dd id="detailAttempt">-</dd></div>
-        <div><dt>Turn</dt><dd id="detailTurn">-</dd></div>
-        <div><dt>Action</dt><dd id="detailAction">-</dd></div>
-        <div><dt>Damage</dt><dd id="detailDamage">-</dd></div>
-        <div><dt>Result</dt><dd id="detailBossHp">-</dd></div>
-      </dl>
-    </section>
-    <section class="data-section">
-      <h3>Skill Status</h3>
-      <div id="skillList" class="skill-list"></div>
-    </section>
-    <section class="data-section grow">
-      <h3>Event Log</h3>
-      <ol id="eventList" class="event-list"></ol>
-    </section>
-  </div>
-</aside>
-
-<audio id="bgmBoss" src="./assets/bgm/boss.m4a" loop preload="auto" hidden></audio>
-
-<script>
-(()=>{
-  var c=document.getElementById('particles');
-  if(c){
-    var colors=['#ff2d95','#ff3355','#ff7700','#ffaa00','#00e5ff'];
-    for(var i=0;i<60;i++){
-      var p=document.createElement('div');
-      p.className='particle';
-      if(Math.random()<.35)p.className+=' '+(Math.random()<.5?'dim':'bright');
-      p.style.left=Math.random()*100+'%';
-      p.style.background=colors[Math.floor(Math.random()*colors.length)];
-      p.style.animationDuration=(5+Math.random()*18)+'s';
-      p.style.animationDelay=Math.random()*14+'s';
-      p.style.width=(1+Math.random()*2.5)+'px';
-      p.style.height=p.style.width;
-      c.appendChild(p);
-    }
-  }
-})();
-</script>
-<script src="./boss.js" charset="utf-8" defer></script>
-</body>
+    <script src="boss.js"></script>
+  </body>
 </html>

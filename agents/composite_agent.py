@@ -1,108 +1,88 @@
-"""
-composite_agent.py — 组合 Agent（集成入口，角色1负责）
-------------------------------------------------------
-运行优先级（从高到低）：
-  1. 若处于战斗状态          → CombatAgent
-  2. 若 3×3 内有正收益目标    → LocalGreedyAgent（主力）
-  3. 局部贪心连续无路可走时  → GlobalPlannerAgent（fallback）
-  4. 全局规划到达有收益格子  → 切回 LocalGreedyAgent
-
-局部/全局切换逻辑：
-  - 局部贪心连续 STAY 超过 stuck_threshold 次，认定陷入死路
-    → 激活全局规划器主导，直到周围出现正收益格子才交回局部
-  - 全局规划器处于 RUSH_TO_BOSS / RUSH_TO_EXIT 阶段时不切回局部
-    （这两个阶段需要全局控制）
-"""
-
 from __future__ import annotations
 
-from agents.base_agent import BaseAgent
-from agents.combat_agent import CombatAgent
-from agents.local_greedy_policy import LocalGreedyAgent
-from agents.global_greedy import GlobalGreedyAgent
-from agents.global_planner import GlobalPlannerAgent, Phase
-from core.state import GameContext, Action
+from core.state import Action, GameContext, Move
 
-# 局部贪心连续输出 STAY 达到此阈值时认定陷入死路
-DEFAULT_STUCK_THRESHOLD = 2
+from .ai_maze_composite import AIMazeCompositeAgent
+from .ai_maze_global_greedy import AIMazeGlobalGreedyAgent
+from .ai_maze_global_planner import AIMazeGlobalPlannerAgent
+from .base import BaseAgent
+from .combat_agent import CombatAgent
+from .global_greedy import GlobalGreedyAgent
+from .global_planner import GlobalPlannerAgent, PlannerPhase
+from .local_3x3_greedy import Local3x3GreedyAgent
+from .local_greedy_policy import LocalGreedyAgent
 
 
 class CompositeAgent(BaseAgent):
-
-    def __init__(self, config: dict = None):
-        super().__init__(name="CompositeAgent")
+    def __init__(self, config: dict | None = None) -> None:
         cfg = config or {}
-        global_cfg = {
-            **cfg.get("global", {}),
-            "max_rounds": cfg.get("sim", {}).get("max_rounds", 500),
-        }
-        self.strategy: str = cfg.get("composite", {}).get("strategy", "hybrid")
-        self.global_planner = GlobalPlannerAgent(config=global_cfg)
-        self.global_greedy = GlobalGreedyAgent(config=global_cfg)
-        self.local_greedy   = LocalGreedyAgent(config=cfg.get("local", {}))
-        self.combat = CombatAgent()
-
-        self._stuck_threshold: int = cfg.get("composite", {}).get(
-            "stuck_threshold", DEFAULT_STUCK_THRESHOLD
-        )
-        self._stuck_count: int = 0        # 局部贪心连续 STAY 计数
-        self._global_active: bool = False # 全局规划器是否当前主导
-
-    def on_episode_start(self, ctx: GameContext):
-        self.global_planner.on_episode_start(ctx)
-        self.global_greedy.on_episode_start(ctx)
-        self._stuck_count = 0
-        self._global_active = False
-
-    def on_episode_end(self, ctx: GameContext):
-        self.global_planner.on_episode_end(ctx)
-        self.global_greedy.on_episode_end(ctx)
+        self.mode = cfg.get("mode", cfg.get("composite", {}).get("mode", "hybrid"))
+        composite_cfg = cfg.get("composite", cfg)
+        self.stuck_threshold = int(composite_cfg.get("stuck_threshold", 2))
+        self.local = LocalGreedyAgent(cfg.get("local", {}))
+        self.planner = GlobalPlannerAgent(cfg.get("global", {}))
+        self.global_greedy = GlobalGreedyAgent({**cfg.get("global", {}), **cfg.get("local", {})})
+        self.combat = CombatAgent(cfg.get("combat", {}).get("enable_memory", True))
+        self.stay_count = 0
+        self.global_dominant = False
 
     def decide(self, ctx: GameContext) -> Action:
-        # 优先级 1：战斗状态始终最高
         if self.combat.should_fight(ctx):
-            self._stuck_count = 0
-            return self.combat.decide_combat(ctx)
+            self.stay_count = 0
+            return self.combat.decide(ctx)
 
-        if self.strategy == "direct_global":
-            self._stuck_count = 0
-            self._global_active = False
+        if self.mode == "direct_global":
             return self.global_greedy.decide(ctx)
+        if self.mode == "planner":
+            return self.planner.decide(ctx)
+        if self.mode == "local":
+            return self.local.decide(ctx)
 
-        # 全局规划器处于必须自主控制的阶段（RUSH_TO_BOSS / RUSH_TO_EXIT）
-        # 这两个阶段目标明确且路径已由全局规划，不应被局部打断
-        if self.global_planner.phase in (Phase.RUSH_TO_BOSS, Phase.RUSH_TO_EXIT):
-            self._global_active = True
-            self._stuck_count = 0
-            return self.global_planner.decide(ctx)
+        if self.planner.phase in {PlannerPhase.RUSH_TO_BOSS, PlannerPhase.RUSH_TO_EXIT}:
+            self.global_dominant = True
+            action = self.planner.decide(ctx)
+            if action.move != Move.STAY.value:
+                return action
 
-        # 如果全局规划器当前主导，检查周围是否已有正收益格子
-        if self._global_active:
-            r, c = ctx.player.pos
-            candidates = self.local_greedy._score_3x3(r, c, ctx.maze)
-            has_local_reward = any(score > 0 for _, score in candidates)
-            if has_local_reward:
-                # 周围已有正收益，切回局部贪心
-                self._global_active = False
-                self._stuck_count = 0
-                self.global_planner._path = []  # 清空全局路径缓存
-            else:
-                # 周围仍无收益，继续由全局规划器导航
-                return self.global_planner.decide(ctx)
+        if self.global_dominant:
+            local_action = self.local.decide(ctx)
+            if local_action.move != Move.STAY.value:
+                self.global_dominant = False
+                self.stay_count = 0
+                return local_action
+            action = self.planner.decide(ctx)
+            if action.move != Move.STAY.value:
+                return action
 
-        # 优先级 2：局部贪心（主力）
-        action = self.local_greedy.decide(ctx)
-
-        if action.move == "STAY":
-            # 局部贪心无路可走，计数
-            self._stuck_count += 1
-            if self._stuck_count >= self._stuck_threshold:
-                # 连续卡顿，切换到全局规划器
-                self._global_active = True
-                self._stuck_count = 0
-                self.global_planner._path = []  # 强制重新规划
-                return self.global_planner.decide(ctx)
+        action = self.local.decide(ctx)
+        if action.move == Move.STAY.value:
+            self.stay_count += 1
         else:
-            self._stuck_count = 0
+            self.stay_count = 0
+            return action
 
+        if self.stay_count >= self.stuck_threshold:
+            self.global_dominant = True
+            return self.planner.decide(ctx)
         return action
+
+
+def make_agent(agent_name: str, config: dict | None = None) -> BaseAgent:
+    normalized = (agent_name or "hybrid").lower()
+    if normalized in {"hybrid", "composite"}:
+        return CompositeAgent(config or {})
+    if normalized == "local":
+        return LocalGreedyAgent((config or {}).get("local", {}))
+    if normalized in {"local_3x3", "local_greedy_3x3"}:
+        return Local3x3GreedyAgent((config or {}).get("local", {}))
+    if normalized == "planner":
+        return GlobalPlannerAgent((config or {}).get("global", {}))
+    if normalized in {"global_greedy", "direct_global"}:
+        return GlobalGreedyAgent({**(config or {}).get("global", {}), **(config or {}).get("local", {})})
+    if normalized in {"ai_global_greedy", "ai_maze_global_greedy"}:
+        return AIMazeGlobalGreedyAgent({**(config or {}).get("global", {}), **(config or {}).get("local", {})})
+    if normalized in {"ai_global_planner", "ai_maze_global_planner"}:
+        return AIMazeGlobalPlannerAgent({**(config or {}).get("global", {}), **(config or {}).get("sim", {})})
+    if normalized in {"ai_composite", "ai_maze", "ai_maze_hybrid"}:
+        return AIMazeCompositeAgent(config or {})
+    raise ValueError(f"Unknown agent: {agent_name}")

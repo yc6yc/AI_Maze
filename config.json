@@ -1,37 +1,33 @@
 {
-  "_comment": "AI Maze 项目统一参数配置（由角色4评测负责人维护）",
-  "local": {
-    "coin_value":      50,
-    "trap_penalty":    30,
-    "step_cost":       10.0,
-    "explore_bonus":   8.0,
-    "visited_penalty": 3.0,
-    "w_backtrack":     2.0
-  },
-  "global": {
-    "w_coin": 2.0,
-    "w_trap": 1.5,
-    "base_cost": 1.0,
-    "rush_round_threshold": 50,
-    "retry_buffer": 1,
-    "min_explore_ratio": 0.4,
-    "trap_step_cost": 31,
-    "coin_value": 50.0,
-    "frontier_value": 14.0,
-    "boss_value": 120.0,
-    "exit_value": 1000000.0,
-    "target_retry_buffer": 1,
-    "frontier_unknown_weight": 4.0,
-    "revisit_penalty": 0.15,
-    "min_explore_before_boss": 0.25
-  },
   "sim": {
-    "max_rounds": 500,
+    "max_steps": 500,
+    "coin_value": 50,
+    "trap_damage": 30,
     "view_radius": 1
   },
+  "combat": {
+    "enable_memory": true
+  },
+  "local": {
+    "coin_value": 50,
+    "trap_penalty": 30,
+    "step_cost": 10.0,
+    "explore_bonus": 8.0,
+    "visited_penalty": 3.0,
+    "w_backtrack": 2.0
+  },
+  "global": {
+    "trap_step_cost": 31.0,
+    "boss_coin_threshold": 0,
+    "explore_ratio_before_boss": 0.18,
+    "frontier_value": 12.0,
+    "frontier_unknown_weight": 2.0,
+    "boss_value": 160.0,
+    "exit_value": 10000.0,
+    "revisit_penalty": 1.8
+  },
   "composite": {
-    "_comment": "stuck_threshold: 局部贪心连续返回 STAY 多少次后切换全局规划; strategy: hybrid=旧局部+全局 fallback, direct_global=直接全局策略",
-    "stuck_threshold": 2,
-    "strategy": "hybrid"
+    "mode": "hybrid",
+    "stuck_threshold": 2
   }
 }

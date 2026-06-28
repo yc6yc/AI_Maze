@@ -1,311 +1,58 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI Maze Exploration</title>
-<link rel="stylesheet" href="./styles.css">
-</head>
-<body class="intro-active">
-
-<div id="void-bg"></div>
-<div id="scanlines"></div>
-<div id="chroma"></div>
-<div class="glow-orb glow-orb-a"></div>
-<div class="glow-orb glow-orb-b"></div>
-<div class="glow-orb glow-orb-c"></div>
-<div id="particles"></div>
-
-<div class="corner corner-tl"></div>
-<div class="corner corner-tr"></div>
-<div class="corner corner-bl"></div>
-<div class="corner corner-br"></div>
-
-<!-- ===== INTRO SCREEN ===== -->
-<section class="intro-screen" id="introScreen" aria-label="Intro">
-  <div class="intro-grid-bg" id="introMiniMap"></div>
-  <div class="intro-overlay"></div>
-  <div class="intro-content">
-    <div class="intro-copy">
-      <p class="eyebrow">Algorithm Arena</p>
-      <h1>MAZE EXPLORATION</h1>
-      <p class="intro-tagline">Greedy exploration × memory backtracking — navigate the fog of war, collect coins, defeat bosses, reach the exit.</p>
-      <div class="intro-stats">
-        <div><span>Map Size</span><strong id="introSize">--</strong></div>
-        <div><span>Planned Route</span><strong id="introRoute">--</strong></div>
-        <div><span>Bosses</span><strong id="introBoss">--</strong></div>
-      </div>
-      <button id="startGameBtn" class="start-btn" type="button" disabled>
-        <span>Enter Maze</span><span class="start-mark">▶</span>
-      </button>
-    </div>
-  </div>
-  <div class="intro-meta" id="introMeta">Loading map data...</div>
-  <div class="map-selector" id="mapSelector">
-    <button class="map-selector-trigger" id="mapSelectorTrigger">MAPS</button>
-  </div>
-</section>
-
-<!-- ===== MAIN GAME VIEW ===== -->
-<main class="app-shell">
-
-  <!-- TOP BAR -->
-  <div class="topbar-area">
-    <div class="brand-block">
-      <p class="eyebrow" style="margin-bottom:0;">AI Maze</p>
-      <span id="mapName" class="status-pill">maze_15_15.json</span>
-      <span id="runState" class="status-pill accent">Standby</span>
-    </div>
-    <div class="minimap-wrap">
-      <div class="minimap-ring"></div>
-      <div class="minimap-label" id="phaseLabel">Loading</div>
-    </div>
-  </div>
-
-  <!-- LEFT SIDEBAR -->
-  <div class="sidebar left" id="sidebarLeft">
-    <div class="sidebar-tab" id="sidebarLeftTab"><span>M<br>E<br>N<br>U</span></div>
-    <div class="sidebar-body">
-      <div class="sidebar-inner">
-      <div class="panel glass">
-        <div class="section-title">Metrics</div>
-        <div class="metrics-grid">
-          <div class="metric-tile"><span>Round</span><strong id="metricRound">0</strong></div>
-          <div class="metric-tile"><span>Coins</span><strong id="metricCoins">0</strong></div>
-          <div class="metric-tile"><span>Explored</span><strong id="metricExplored">0%</strong></div>
-          <div class="metric-tile"><span id="metricRouteLabel">Route</span><strong id="metricRoute">0</strong></div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Maze Static Demo</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="demo-shell">
+      <section class="workspace">
+        <header class="demo-topbar">
+          <div>
+            <h1>AI Maze</h1>
+            <p id="mapName">sample.json</p>
+          </div>
+          <div class="demo-actions">
+            <button id="loadSampleBtn">加载样例</button>
+            <label class="file-btn">
+              导入地图
+              <input id="fileInput" type="file" accept="application/json" />
+            </label>
+            <button id="runBtn">模拟</button>
+            <button id="playBtn">播放</button>
+          </div>
+        </header>
+        <div class="stage">
+          <canvas id="mazeCanvas"></canvas>
+          <div id="bossLayer" class="boss-layer hidden">
+            <iframe src="boss.html?embed=1" title="Boss battle"></iframe>
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div class="panel glass tool-section">
-        <div class="section-title">View Mode</div>
-        <div class="segmented-control" role="tablist">
-          <button type="button" class="segment active" data-mode="live">Live</button>
-          <button type="button" class="segment" data-mode="full">Full</button>
-          <button type="button" class="segment" data-mode="risk">Risk</button>
-          <button type="button" class="segment" data-mode="reward">Reward</button>
+      <aside class="dashboard">
+        <div class="metric-row">
+          <span>步数</span>
+          <strong id="stepsText">0</strong>
         </div>
-        <div class="toggle-grid">
-          <label class="toggle-field"><input id="toggleFog" type="checkbox" checked><span>Fog</span></label>
-          <label class="toggle-field"><input id="togglePath" type="checkbox" checked><span>Path</span></label>
-          <label class="toggle-field"><input id="toggleHeat" type="checkbox"><span>Heat</span></label>
-          <label class="toggle-field"><input id="toggleSprites" type="checkbox" checked><span>Sprites</span></label>
+        <div class="metric-row">
+          <span>价值</span>
+          <strong id="coinsText">0</strong>
         </div>
-      </div>
-
-      <div class="panel glass tool-section">
-        <div class="section-title">Map</div>
-        <div class="button-row">
-          <button id="loadDefaultBtn" type="button" class="secondary-btn">Default</button>
-          <label class="file-btn">Import<input id="fileInput" type="file" accept="application/json,.json"></label>
+        <div class="metric-row">
+          <span>评分</span>
+          <strong id="scoreText">0.00</strong>
         </div>
-        <p id="mapMeta" class="meta-text">Loading...</p>
-      </div>
+        <div class="metric-row">
+          <span>状态</span>
+          <strong id="phaseText">ready</strong>
+        </div>
+        <ol id="eventList" class="event-stream"></ol>
+      </aside>
+    </main>
 
-      <div class="panel glass tool-section compare-section">
-        <div class="section-title">Compare</div>
-        <button id="runCompareBtn" type="button" class="primary-btn" style="width:100%;margin-bottom:6px;">Run</button>
-        <p class="meta-text" style="font-size:8px;">Local Greedy vs Global Greedy</p>
-      </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- CENTER: MAZE + BATTLE ARENA -->
-  <section class="stage-area">
-    <!-- LEFT ACTOR: Drifter -->
-    <aside class="actor-panel actor-player" id="actorPlayer">
-      <img src="./assets/leaper_idle.png" class="actor-svg actor-leaper" alt="Drifter" draggable="false">
-      <div class="actor-label">
-        <span class="actor-name">DRIFTER</span>
-        <span id="playerHp" class="actor-hp">Coins: --</span>
-      </div>
-    </aside>
-
-    <!-- CANVAS STACK -->
-    <div class="canvas-stack" id="canvasStack">
-      <canvas id="mazeCanvas" width="960" height="960" aria-label="Maze canvas"></canvas>
-      <div id="emptyMapPrompt" class="empty-map-prompt">
-        <p>Click MAPS in the top-right to load a map</p>
-        <button id="emptyImportBtn" type="button" class="empty-import-btn">Import JSON Map</button>
-      </div>
-      <div class="battle-prompt hidden" id="battlePrompt">
-        <p>Boss Encountered!</p>
-        <button id="enterBattleBtn" type="button" class="primary-btn">Enter Battle</button>
-      </div>
-    </div>
-
-    <!-- Battle effects overlay (slash, damage, particles between the two actors) -->
-    <div class="battle-effects" id="battleEffects" aria-hidden="true">
-      <div class="slash-beam" id="slashBeam"></div>
-      <div class="damage-pop" id="damagePop">-DMG</div>
-      <div class="particle-burst" id="particleBurst"></div>
-    </div>
-
-    <!-- RIGHT ACTOR: Boss -->
-    <aside class="actor-panel actor-boss" id="actorBoss">
-      <img src="./assets/boss_awaken.png" class="actor-svg actor-boss-anim" alt="Judgement" draggable="false">
-      <div class="actor-label">
-        <span class="actor-name">JUDGEMENT</span>
-        <span id="bossHp" class="actor-hp">HP: --</span>
-      </div>
-    </aside>
-  </section>
-
-  <!-- RIGHT SIDEBAR -->
-  <div class="sidebar right" id="sidebarRight">
-    <div class="sidebar-tab" id="sidebarRightTab"><span>I<br>N<br>F<br>O</span></div>
-    <div class="sidebar-body">
-      <div class="sidebar-inner">
-      <div class="panel glass insight-section">
-        <div class="section-title">Current Tile</div>
-        <dl class="detail-grid">
-          <div><dt>Coord</dt><dd id="tileCoord">-</dd></div>
-          <div><dt>Type</dt><dd id="tileType">-</dd></div>
-          <div><dt>Weight</dt><dd id="tileWeight">-</dd></div>
-        </dl>
-      </div>
-
-      <div class="panel glass insight-section">
-        <div class="section-title">Legend</div>
-        <div class="legend-grid" id="legendGrid"></div>
-      </div>
-
-      <div class="panel glass insight-section grow">
-        <div class="section-title">Events</div>
-        <ol id="eventList" class="event-list"></ol>
-      </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- BOTTOM BAR -->
-  <div class="bottombar-area">
-    <div id="cellReadout" class="cell-readout">Hover tile for info</div>
-    <div class="button-row">
-      <button id="resetBtn" type="button" class="icon-btn" aria-label="Reset">↺</button>
-      <button id="prevBtn" type="button" class="icon-btn" aria-label="Prev">◀</button>
-      <button id="playBtn" type="button" class="primary-btn" aria-label="Play/Pause">▶</button>
-      <button id="nextBtn" type="button" class="icon-btn" aria-label="Next">▶</button>
-      <label class="range-field" style="margin-top:0;">
-        <input id="timeline" type="range" min="0" max="0" value="0">
-      </label>
-      <label class="range-field" style="margin-top:0;">
-        <input id="speedRange" type="range" min="1" max="12" value="5">
-        <output id="speedLabel">5x</output>
-      </label>
-    </div>
-  </div>
-
-</main>
-
-<!-- Battle data toggle button (body-level, only visible in melee-mode) -->
-<button id="battleDataBtn" type="button" class="battle-data-toggle" aria-label="Toggle battle data panel" hidden>
-  <span>DATA</span>
-</button>
-
-<!-- Battle data panel (body-level, slide-in from right) -->
-<aside id="battleDataPanel" class="battle-data-panel hidden">
-  <div class="battle-data-header">
-    <span class="battle-data-title">Combat Data</span>
-    <button id="closeBattleDataBtn" type="button" class="close-btn" aria-label="Close">×</button>
-  </div>
-  <div class="battle-data-body">
-    <section class="data-section">
-      <h3>Metrics</h3>
-      <div class="data-grid">
-        <div><span>Hit</span><strong id="bdHit">0 / 5</strong></div>
-        <div><span>Phase</span><strong id="bdPhase">Idle</strong></div>
-        <div><span>Round</span><strong id="bdRound">0</strong></div>
-        <div><span>Coins</span><strong id="bdCoins">0</strong></div>
-      </div>
-    </section>
-    <section class="data-section">
-      <h3>Current Action</h3>
-      <dl class="detail-list">
-        <div><dt>Player</dt><dd id="bdPlayerAction">Idle</dd></div>
-        <div><dt>Boss</dt><dd id="bdBossAction">Idle</dd></div>
-        <div><dt>Effect</dt><dd id="bdEffect">None</dd></div>
-        <div><dt>Screen</dt><dd id="bdScreen">Stable</dd></div>
-      </dl>
-    </section>
-    <section class="data-section grow">
-      <h3>Event Log</h3>
-      <ol id="bdEventList" class="event-list"></ol>
-    </section>
-  </div>
-</aside>
-
-<!-- ===== ALGORITHM COMPARE OVERLAY ===== -->
-<div id="compareOverlay" class="compare-overlay" hidden aria-hidden="true">
-  <div class="compare-overlay-backdrop"></div>
-  <section class="compare-overlay-shell">
-    <div class="compare-overlay-topbar">
-      <div>
-        <p class="eyebrow">Algorithm Arena</p>
-        <h2>Algorithm Comparison</h2>
-      </div>
-      <button id="closeCompareOverlayBtn" type="button" class="icon-btn" aria-label="关闭">✕</button>
-    </div>
-    <div id="compareResults" class="compare-results"></div>
-  </section>
-</div>
-
-<!-- ===== BOSS ALERTS ===== -->
-<div id="bossAlert" class="boss-alert" hidden aria-hidden="true">
-  <div class="boss-alert-line" aria-hidden="true"></div>
-  <section class="boss-alert-card">
-    <span class="boss-alert-kicker">BOSS ENCOUNTER</span>
-    <strong id="bossAlertTitle">Boss Encountered</strong>
-    <span id="bossAlertMeta">Combat link established</span>
-  </section>
-  <div class="boss-alert-line" aria-hidden="true"></div>
-</div>
-
-<div id="bossWinAlert" class="boss-win-alert" hidden aria-hidden="true">
-  <section class="boss-win-card">
-    <strong class="boss-win-word">VICTORY</strong>
-    <span id="bossWinMeta" class="boss-win-meta">Boss defeated</span>
-  </section>
-</div>
-
-<div id="bossOverlay" class="boss-overlay" hidden aria-hidden="true">
-  <div class="boss-overlay-backdrop"></div>
-  <section class="boss-overlay-shell">
-    <div class="boss-overlay-topbar">
-      <div>
-        <p class="eyebrow">Combat Link</p>
-        <h2 id="bossOverlayTitle">Boss Battle in progress</h2>
-      </div>
-      <button id="closeBossOverlayBtn" type="button" class="icon-btn" aria-label="关闭">✕</button>
-    </div>
-    <iframe id="bossOverlayFrame" class="boss-overlay-frame" title="Boss 战可视化" loading="eager"></iframe>
-  </section>
-</div>
-
-<audio id="bgmIntro" src="./assets/bgm/intro.m4a" loop preload="auto" hidden></audio>
-<audio id="bgmMaze" src="./assets/bgm/maze.m4a" loop preload="auto" hidden></audio>
-<audio id="bgmBoss" src="./assets/bgm/boss.m4a" loop preload="auto" hidden></audio>
-
-<script>
-(()=>{
-  var c=document.getElementById('particles');
-  var colors=['#ff2d95','#00e5ff','#ffaa00','#ff3355','#44ff88','#9b5de5','#00ffc8'];
-  var speeds=['drift','driftSlow','driftFast','driftTwinkle'];
-  var types=['dim','normal','bright','giant'];
-  for(var i=0;i<110;i++){
-    var p=document.createElement('div');
-    var typeIdx=Math.floor(Math.random()*types.length);
-    p.className='particle '+types[typeIdx];
-    p.style.left=Math.random()*100+'%';
-    p.style.background=colors[Math.floor(Math.random()*colors.length)];
-    p.style.animationName=speeds[Math.floor(Math.random()*speeds.length)];
-    p.style.animationDuration=(4+Math.random()*20)+'s';
-    p.style.animationDelay=Math.random()*16+'s';
-    c.appendChild(p);
-  }
-})();
-</script>
-<script src="./app.js?v=20260623-fix" charset="utf-8" defer></script>
-</body>
+    <script src="app.js"></script>
+  </body>
 </html>

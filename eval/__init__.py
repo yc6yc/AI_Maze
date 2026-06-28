@@ -1,1 +1,1 @@
-# eval package - 评测工具
+"""Offline simulation and evaluation helpers."""

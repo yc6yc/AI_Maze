@@ -1,156 +1,140 @@
-"""
-pathfinding.py — 通用寻路算法库
-负责人：角色3（全局规划），角色2（局部贪心）共用
-------------------------------------------------
-提供：
-  - BFS（无权最短路径）
-  - A*（启发式最短路径）
-  - Dijkstra（带权最短路径）
-"""
-
 from __future__ import annotations
-import heapq
+
 from collections import deque
-from typing import Callable, Dict, List, Optional, Tuple
+from heapq import heappop, heappush
+from math import inf
+from typing import Callable
 
-from core.state import MazeState
-
-
-# 坐标类型
-Pos = Tuple[int, int]
+from .state import CARDINAL_MOVES, MazeState, Position, move_to_delta
 
 
-# --------------------------------------------------------------------------- #
-# BFS
-# --------------------------------------------------------------------------- #
-def bfs(
-    maze: MazeState,
-    start: Pos,
-    goal: Pos,
-    walkable_override: Optional[Callable[[int, int], bool]] = None,
-) -> Optional[List[Pos]]:
-    """
-    BFS 最短路径。返回从 start 到 goal 的格子列表（含两端），
-    若不可达返回 None。
-    walkable_override: 可选的自定义可通行判断函数 (r, c) -> bool
-    """
-    is_walkable = walkable_override or maze.is_walkable
-
-    visited: Dict[Pos, Optional[Pos]] = {start: None}
-    queue: deque[Pos] = deque([start])
-
-    while queue:
-        cur = queue.popleft()
-        if cur == goal:
-            return _reconstruct(visited, start, goal)
-        r, c = cur
-        for nr, nc in maze.neighbors(r, c):
-            nxt = (nr, nc)
-            if nxt not in visited and is_walkable(nr, nc):
-                visited[nxt] = cur
-                queue.append(nxt)
-    return None
+WalkableFn = Callable[[Position], bool]
+CostFn = Callable[[Position], float]
 
 
-# --------------------------------------------------------------------------- #
-# A*
-# --------------------------------------------------------------------------- #
-def astar(
-    maze: MazeState,
-    start: Pos,
-    goal: Pos,
-    walkable_override: Optional[Callable[[int, int], bool]] = None,
-    heuristic: Callable[[Pos, Pos], float] = None,
-) -> Optional[List[Pos]]:
-    """
-    A* 最短路径。默认曼哈顿距离启发函数。
-    """
-    is_walkable = walkable_override or maze.is_walkable
-    h = heuristic or _manhattan
-
-    g_score: Dict[Pos, float] = {start: 0}
-    came_from: Dict[Pos, Optional[Pos]] = {start: None}
-    # heap: (f, g, pos)
-    heap: List[Tuple[float, float, Pos]] = [(h(start, goal), 0, start)]
-
-    while heap:
-        f, g, cur = heapq.heappop(heap)
-        if cur == goal:
-            return _reconstruct(came_from, start, goal)
-        if g > g_score.get(cur, float("inf")):
-            continue
-        r, c = cur
-        for nr, nc in maze.neighbors(r, c):
-            nxt = (nr, nc)
-            if not is_walkable(nr, nc):
-                continue
-            ng = g + 1
-            if ng < g_score.get(nxt, float("inf")):
-                g_score[nxt] = ng
-                came_from[nxt] = cur
-                heapq.heappush(heap, (ng + h(nxt, goal), ng, nxt))
-    return None
+def neighbors(pos: Position, maze: MazeState, walkable_override: WalkableFn | None = None) -> list[Position]:
+    walkable = walkable_override or maze.is_walkable
+    result: list[Position] = []
+    r, c = pos
+    for move in CARDINAL_MOVES:
+        dr, dc = move_to_delta(move)
+        nxt = (r + dr, c + dc)
+        if maze.in_bounds(nxt) and walkable(nxt):
+            result.append(nxt)
+    return result
 
 
-# --------------------------------------------------------------------------- #
-# Dijkstra（带权）
-# --------------------------------------------------------------------------- #
-def dijkstra(
-    maze: MazeState,
-    start: Pos,
-    goal: Optional[Pos] = None,
-    weight_fn: Callable[[int, int], float] = None,
-) -> Tuple[Dict[Pos, float], Dict[Pos, Optional[Pos]]]:
-    """
-    Dijkstra 算法。返回 (dist, prev) 字典。
-    weight_fn: (r, c) -> float，格子代价（默认 1）。
-    若指定 goal，找到即提前退出。
-    """
-    w = weight_fn or (lambda r, c: 1.0)
-
-    dist: Dict[Pos, float] = {start: 0.0}
-    prev: Dict[Pos, Optional[Pos]] = {start: None}
-    heap: List[Tuple[float, Pos]] = [(0.0, start)]
-
-    while heap:
-        d, cur = heapq.heappop(heap)
-        if cur == goal:
-            break
-        if d > dist.get(cur, float("inf")):
-            continue
-        r, c = cur
-        for nr, nc in maze.neighbors(r, c):
-            nxt = (nr, nc)
-            if not maze.is_walkable(nr, nc):
-                continue
-            nd = d + w(nr, nc)
-            if nd < dist.get(nxt, float("inf")):
-                dist[nxt] = nd
-                prev[nxt] = cur
-                heapq.heappush(heap, (nd, nxt))
-
-    return dist, prev
-
-
-def extract_path(prev: Dict[Pos, Optional[Pos]], start: Pos, goal: Pos) -> Optional[List[Pos]]:
-    """从 Dijkstra prev 字典重建路径"""
-    if goal not in prev:
-        return None
-    return _reconstruct(prev, start, goal)
-
-
-# --------------------------------------------------------------------------- #
-# 内部工具
-# --------------------------------------------------------------------------- #
-def _reconstruct(came_from: Dict[Pos, Optional[Pos]], start: Pos, goal: Pos) -> List[Pos]:
-    path: List[Pos] = []
-    cur: Optional[Pos] = goal
-    while cur is not None:
+def reconstruct_path(came_from: dict[Position, Position], start: Position, goal: Position) -> list[Position]:
+    if goal == start:
+        return [start]
+    if goal not in came_from:
+        return []
+    path = [goal]
+    cur = goal
+    while cur != start:
+        cur = came_from[cur]
         path.append(cur)
-        cur = came_from.get(cur)
     path.reverse()
     return path
 
 
-def _manhattan(a: Pos, b: Pos) -> float:
-    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+def extract_path(came_from: dict[Position, Position], start: Position, goal: Position) -> list[Position]:
+    """Compatibility alias for Dijkstra-style predecessor maps."""
+    return reconstruct_path(came_from, start, goal)
+
+
+def bfs(
+    maze: MazeState,
+    start: Position,
+    goal: Position | None = None,
+    walkable_override: WalkableFn | None = None,
+) -> list[Position] | dict[Position, int]:
+    walkable = walkable_override or maze.is_walkable
+    if not maze.in_bounds(start) or not walkable(start):
+        return [] if goal is not None else {}
+
+    queue: deque[Position] = deque([start])
+    dist: dict[Position, int] = {start: 0}
+    came_from: dict[Position, Position] = {}
+
+    while queue:
+        cur = queue.popleft()
+        if goal is not None and cur == goal:
+            return reconstruct_path(came_from, start, goal)
+        for nxt in neighbors(cur, maze, walkable):
+            if nxt in dist:
+                continue
+            dist[nxt] = dist[cur] + 1
+            came_from[nxt] = cur
+            queue.append(nxt)
+
+    if goal is not None:
+        return []
+    return dist
+
+
+def astar(
+    maze: MazeState,
+    start: Position,
+    goal: Position,
+    walkable_override: WalkableFn | None = None,
+    cost_fn: CostFn | None = None,
+) -> list[Position]:
+    walkable = walkable_override or maze.is_walkable
+    if not maze.in_bounds(start) or not maze.in_bounds(goal):
+        return []
+    if not walkable(start) or not walkable(goal):
+        return []
+
+    def heuristic(pos: Position) -> int:
+        return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+
+    cost = cost_fn or (lambda _pos: 1.0)
+    open_heap: list[tuple[float, Position]] = [(heuristic(start), start)]
+    came_from: dict[Position, Position] = {}
+    g_score: dict[Position, float] = {start: 0.0}
+
+    while open_heap:
+        _priority, cur = heappop(open_heap)
+        if cur == goal:
+            return reconstruct_path(came_from, start, goal)
+        for nxt in neighbors(cur, maze, walkable):
+            tentative = g_score[cur] + max(cost(nxt), 0.0)
+            if tentative >= g_score.get(nxt, inf):
+                continue
+            came_from[nxt] = cur
+            g_score[nxt] = tentative
+            heappush(open_heap, (tentative + heuristic(nxt), nxt))
+    return []
+
+
+def dijkstra(
+    maze: MazeState,
+    start: Position,
+    goal: Position | None = None,
+    walkable_override: WalkableFn | None = None,
+    cost_fn: CostFn | None = None,
+) -> tuple[dict[Position, float], dict[Position, Position]]:
+    walkable = walkable_override or maze.is_walkable
+    if not maze.in_bounds(start) or not walkable(start):
+        return {}, {}
+
+    cost = cost_fn or (lambda _pos: 1.0)
+    heap: list[tuple[float, Position]] = [(0.0, start)]
+    dist: dict[Position, float] = {start: 0.0}
+    came_from: dict[Position, Position] = {}
+
+    while heap:
+        cur_cost, cur = heappop(heap)
+        if cur_cost > dist[cur]:
+            continue
+        if goal is not None and cur == goal:
+            break
+        for nxt in neighbors(cur, maze, walkable):
+            nxt_cost = cur_cost + max(cost(nxt), 0.0)
+            if nxt_cost >= dist.get(nxt, inf):
+                continue
+            dist[nxt] = nxt_cost
+            came_from[nxt] = cur
+            heappush(heap, (nxt_cost, nxt))
+    return dist, came_from

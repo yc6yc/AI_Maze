@@ -1,0 +1,772 @@
+const { createApp } = Vue;
+
+function storageRemove(key) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch (err) {
+    // Nothing to clean up when storage is unavailable.
+  }
+}
+
+function cellRand(r, c, seed = 17) {
+  let n = (r + 1) * 374761393 + (c + 1) * 668265263 + seed * 1442695041;
+  n = (n ^ (n >> 13)) * 1274126177;
+  return ((n ^ (n >> 16)) >>> 0) / 4294967295;
+}
+
+function calcLayout(canvas, rows, cols) {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const pad = 18;
+  const tile = Math.max(12, Math.floor(Math.min((rect.width - pad * 2) / cols, (rect.height - pad * 2) / rows)));
+  return {
+    ctx,
+    width: rect.width,
+    height: rect.height,
+    tile,
+    originX: (rect.width - tile * cols) / 2,
+    originY: (rect.height - tile * rows) / 2,
+  };
+}
+
+function drawCell(ctx, x, y, tile, cell, r, c) {
+  const jitter = cellRand(r, c);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = 1;
+  if (cell === null || cell === undefined) {
+    ctx.fillStyle = "#030308";
+    ctx.fillRect(0, 0, tile, tile);
+    ctx.fillStyle = `rgba(0, 229, 255, ${0.05 + jitter * 0.06})`;
+    ctx.beginPath();
+    ctx.arc(tile * (0.25 + jitter * 0.55), tile * (0.25 + cellRand(r, c, 8) * 0.55), tile * 0.05, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (cell === "#") {
+    const grad = ctx.createLinearGradient(0, 0, tile, tile);
+    grad.addColorStop(0, "#2b2841");
+    grad.addColorStop(1, "#182f3a");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, tile, tile);
+  } else {
+    ctx.fillStyle = "rgba(30, 23, 42, 0.82)";
+    ctx.fillRect(0, 0, tile, tile);
+    ctx.fillStyle = `rgba(255,255,255,${0.025 + jitter * 0.035})`;
+    ctx.fillRect(tile * 0.12, tile * 0.12, tile * 0.76, tile * 0.76);
+  }
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.strokeRect(0.5, 0.5, tile - 1, tile - 1);
+
+  const center = tile / 2;
+  if (cell === "C" || cell === "G") {
+    ctx.fillStyle = "#ffaa00";
+    ctx.shadowColor = "#ffaa00";
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.arc(center, center, tile * 0.22, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (cell === "T") {
+    ctx.fillStyle = "#ff7a1a";
+    ctx.shadowColor = "#ff3355";
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.moveTo(center, tile * 0.22);
+    ctx.lineTo(tile * 0.78, tile * 0.74);
+    ctx.lineTo(tile * 0.22, tile * 0.74);
+    ctx.closePath();
+    ctx.fill();
+  } else if (cell === "B") {
+    ctx.fillStyle = "#ff3355";
+    ctx.shadowColor = "#ff3355";
+    ctx.shadowBlur = 16;
+    ctx.fillRect(tile * 0.28, tile * 0.28, tile * 0.44, tile * 0.44);
+  } else if (cell === "E") {
+    ctx.strokeStyle = "#ffaa00";
+    ctx.lineWidth = Math.max(2, tile * 0.08);
+    ctx.shadowColor = "#ffaa00";
+    ctx.shadowBlur = 14;
+    ctx.strokeRect(tile * 0.24, tile * 0.24, tile * 0.52, tile * 0.52);
+  } else if (cell === "S") {
+    ctx.fillStyle = "#00e5ff";
+    ctx.globalAlpha = 0.7;
+    ctx.fillRect(tile * 0.28, tile * 0.28, tile * 0.44, tile * 0.44);
+  }
+  ctx.restore();
+}
+
+function renderMaze(canvas, state, path = []) {
+  if (!canvas || !state || !state.fog_map) {
+    return;
+  }
+  const rows = state.fog_map.length;
+  const cols = state.fog_map[0].length;
+  const { ctx, width, height, tile, originX, originY } = calcLayout(canvas, rows, cols);
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "rgba(5,4,10,0.7)";
+  ctx.fillRect(0, 0, width, height);
+
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      drawCell(ctx, originX + c * tile, originY + r * tile, tile, state.fog_map[r][c], r, c);
+    }
+  }
+
+  if (path.length > 1) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(242, 165, 65, 0.88)";
+    ctx.lineWidth = Math.max(3, tile * 0.16);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowColor = "rgba(255, 170, 0, 0.35)";
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    for (let idx = 0; idx < path.length; idx += 1) {
+      const [r, c] = path[idx];
+      const x = originX + c * tile + tile / 2;
+      const y = originY + r * tile + tile / 2;
+      if (idx === 0) {
+        ctx.moveTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  const [pr, pc] = state.pos;
+  const px = originX + pc * tile + tile / 2;
+  const py = originY + pr * tile + tile / 2;
+  ctx.save();
+  ctx.shadowColor = "#00e5ff";
+  ctx.shadowBlur = 24;
+  ctx.fillStyle = "#f4f7fb";
+  ctx.beginPath();
+  ctx.arc(px, py, tile * 0.28, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#ff2d95";
+  ctx.beginPath();
+  ctx.arc(px, py, tile * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+createApp({
+  data() {
+    return {
+      loggedIn: false,
+      maps: [],
+      selectedMap: "sample.json",
+      selectedMapData: null,
+      currentMap: "",
+      selectedAgent: "hybrid",
+      bossSourceMode: "map",
+      manualBossHealthDraft: null,
+      manualBossHealths: [],
+      manualBossHealthsSent: 0,
+      manualBossInputClosed: false,
+      manualBossStreamStatus: "",
+      sessionId: "",
+      state: null,
+      finalState: null,
+      frames: [],
+      playIndex: 0,
+      eventLog: [],
+      busy: false,
+      playing: false,
+      speed: 280,
+      timer: null,
+      statusText: "ready",
+      bossOverlay: false,
+      bossDetail: null,
+      lastBossEventCountShown: 0,
+      bossVideoSrc: "",
+      bossVideoTitle: "BOSS ENCOUNTER",
+      bossVideoTimer: null,
+      bossVideoQueue: [],
+    };
+  },
+  computed: {
+    scoreText() {
+      if (!this.state || !this.state.step) {
+        return "0.00";
+      }
+      const value = this.state.value ?? this.state.coins ?? 0;
+      return (value / Math.max(this.state.step, 1)).toFixed(2);
+    },
+    mapHasBossArray() {
+      if (!this.selectedMapData) {
+        return false;
+      }
+      if (this.selectedMapData.boss_healths_available === true || this.selectedMapData.boss_healths_hidden === true) {
+        return true;
+      }
+      if (this.selectedMapData.boss_healths_available === false) {
+        return false;
+      }
+      return Array.isArray(this.selectedMapData?.B) && this.selectedMapData.B.length > 0;
+    },
+    knownBossHealths() {
+      return this.state?.known_boss_healths || [];
+    },
+    defeatedBossHealths() {
+      return this.knownBossHealths.filter((boss) => boss.status === "defeated");
+    },
+    futureKnownBossHealths() {
+      return this.knownBossHealths.filter((boss) => boss.status === "known");
+    },
+    currentKnownBoss() {
+      return this.state?.current_boss_health || this.knownBossHealths.find((boss) => boss.status === "current") || null;
+    },
+    playbackText() {
+      if (!this.frames.length) {
+        return "0 / 0";
+      }
+      return `${this.playIndex + 1} / ${this.frames.length}`;
+    },
+    travelledPath() {
+      return this.frames.slice(0, this.playIndex + 1).map((frame) => frame.pos).filter(Boolean);
+    },
+    bossFlow() {
+      const events = this.finalState?.boss_events || this.state?.boss_events || [];
+      return events.map((event, idx) => {
+        const reviveCost = Number(event.revive_cost ?? event.revive?.cost ?? event.cost ?? 0);
+        return {
+          ...event,
+          flowIndex: idx + 1,
+          reviveCost,
+          valueBefore: event.value_before ?? event.coins_before ?? 0,
+          valueAfter: event.value_after ?? event.coins_after ?? 0,
+          resultText: event.result === "win" ? "胜利" : "失败",
+          planningText: event.planning_mode === "known_sequence" ? "全 Boss 序列规划" : "当前 Boss 规划",
+        };
+      });
+    },
+  },
+  mounted() {
+    this.loadMaps();
+    window.addEventListener("resize", this.render);
+    if (!this.loggedIn) {
+      this.$nextTick(this.startIntroVideo);
+    }
+  },
+  beforeUnmount() {
+    window.removeEventListener("resize", this.render);
+    this.clearTimer();
+  },
+  methods: {
+    startIntroVideo() {
+      const video = this.$refs.introVideo;
+      if (!video) {
+        return;
+      }
+      video.muted = false;
+      video.volume = 1;
+      video.play().catch(() => {
+        video.muted = true;
+        video.play().catch(() => {});
+      });
+    },
+    enableIntroAudio() {
+      const video = this.$refs.introVideo;
+      if (!video) {
+        return;
+      }
+      video.muted = false;
+      video.volume = 1;
+      video.play().catch(() => {});
+    },
+    login() {
+      this.enableIntroAudio();
+      this.loggedIn = true;
+      this.$nextTick(this.render);
+    },
+    async logout() {
+      storageRemove("ai_maze_started");
+      storageRemove("ai_maze_logged_in");
+      this.loggedIn = false;
+      await this.resetSession();
+    },
+    particleStyle(n) {
+      const left = (n * 37) % 100;
+      const delay = -((n * 0.73) % 8);
+      const duration = 9 + (n % 11);
+      const size = 1 + (n % 4);
+      const colors = ["var(--magenta)", "var(--cyan)", "var(--gold)"];
+      return {
+        left: `${left}%`,
+        width: `${size}px`,
+        height: `${size}px`,
+        color: colors[n % colors.length],
+        animationDelay: `${delay}s`,
+        animationDuration: `${duration}s`,
+      };
+    },
+    async loadMaps() {
+      try {
+        const data = await mazeApi.getMaps();
+        this.maps = data.maps || [];
+        if (this.maps.length && !this.maps.includes(this.selectedMap)) {
+          this.selectedMap = this.maps[0];
+        }
+        await this.loadMapInfo();
+      } catch (err) {
+        this.statusText = err.message;
+      }
+    },
+    async loadMapInfo() {
+      if (!this.selectedMap) {
+        this.selectedMapData = null;
+        return;
+      }
+      try {
+        this.selectedMapData = await mazeApi.getMap(this.selectedMap);
+        this.initBossSourceMode();
+        this.statusText = this.mapHasBossArray ? "ready: 自动读取可用" : "ready: 需要手动输入 Boss";
+      } catch (err) {
+        this.selectedMapData = null;
+        this.initBossSourceMode();
+        this.statusText = err.message;
+      }
+    },
+    async handleMapChange() {
+      this.selectedMapData = null;
+      this.statusText = "loading map";
+      await this.resetSession();
+      await this.loadMapInfo();
+    },
+    async uploadSelectedMap(evt) {
+      const file = evt.target.files[0];
+      if (!file) {
+        return;
+      }
+      this.busy = true;
+      try {
+        const data = await mazeApi.uploadMap(file);
+        await this.loadMaps();
+        this.selectedMap = data.name;
+        await this.resetSession();
+        await this.loadMapInfo();
+        this.statusText = "uploaded";
+      } catch (err) {
+        this.statusText = err.message;
+      } finally {
+        this.busy = false;
+        evt.target.value = "";
+      }
+    },
+    async enterGame() {
+      if (this.bossSourceMode === "manual") {
+        await this.runManualBossSequence({ finalInput: false });
+        return;
+      }
+      this.busy = true;
+      this.clearTimer();
+      try {
+        if (this.sessionId) {
+          await mazeApi.deleteSim(this.sessionId);
+        }
+        const data = await mazeApi.startRunSim(
+          this.selectedMap,
+          this.selectedAgent,
+          undefined,
+          this.bossSetupPayload()
+        );
+        this.sessionId = data.session_id;
+        this.currentMap = this.selectedMap;
+        this.eventLog = [];
+        this.loadPlayback(data.state);
+        if (this.frames.length > 1) {
+          this.playing = true;
+          this.statusText = "playing";
+          this.scheduleStep();
+        } else {
+          this.statusText = data.state?.result || "done";
+        }
+      } catch (err) {
+        this.statusText = err.message;
+      } finally {
+        this.busy = false;
+      }
+    },
+    async stepOnce() {
+      if (!this.frames.length || this.busy) {
+        return;
+      }
+      this.showFrame(Math.min(this.playIndex + 1, this.frames.length - 1));
+    },
+    async runAll() {
+      if (!this.frames.length) {
+        return;
+      }
+      this.clearTimer();
+      this.playing = false;
+      this.showFrame(this.frames.length - 1);
+    },
+    async resetSession() {
+      this.clearTimer();
+      this.clearBossVideoTimer();
+      this.playing = false;
+      if (this.sessionId) {
+        try {
+          await mazeApi.deleteSim(this.sessionId);
+        } catch (err) {
+          this.statusText = err.message;
+        }
+      }
+      this.sessionId = "";
+      this.manualBossHealthsSent = 0;
+      this.state = null;
+      this.finalState = null;
+      this.frames = [];
+      this.playIndex = 0;
+      this.eventLog = [];
+      this.bossDetail = null;
+      this.lastBossEventCountShown = 0;
+      this.bossOverlay = false;
+      this.bossVideoSrc = "";
+      this.bossVideoQueue = [];
+      this.statusText = "ready";
+      this.render();
+    },
+    togglePlay() {
+      this.playing = !this.playing;
+      if (this.playing) {
+        this.scheduleStep();
+      } else {
+        this.clearTimer();
+      }
+    },
+    scheduleStep() {
+      this.clearTimer();
+      if (!this.playing || !this.frames.length || this.playIndex >= this.frames.length - 1) {
+        this.playing = false;
+        return;
+      }
+      this.timer = setTimeout(async () => {
+        this.showFrame(this.playIndex + 1);
+        this.scheduleStep();
+      }, this.speed);
+    },
+    clearTimer() {
+      if (this.timer) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
+    },
+    clearBossVideoTimer() {
+      if (this.bossVideoTimer) {
+        clearTimeout(this.bossVideoTimer);
+        this.bossVideoTimer = null;
+      }
+    },
+    applyState(state) {
+      this.state = state;
+      if (state?.event) {
+        this.eventLog.unshift({ step: state.step, message: this.formatEventMessage(state.event) });
+        this.eventLog = this.eventLog.slice(0, 40);
+      }
+      const bossEvents = Array.isArray(state?.boss_events) ? state.boss_events : [];
+      const newBossEvents = bossEvents.slice(this.lastBossEventCountShown);
+      if (newBossEvents.length) {
+        this.lastBossEventCountShown = bossEvents.length;
+        this.showBossSequence(newBossEvents);
+      }
+      this.$nextTick(this.render);
+    },
+    loadPlayback(finalState) {
+      this.finalState = finalState;
+      const history = Array.isArray(finalState?.history) ? finalState.history : [];
+      this.frames = history.length ? history : [finalState];
+      this.playIndex = 0;
+      this.eventLog = [];
+      this.bossDetail = null;
+      this.lastBossEventCountShown = 0;
+      this.bossVideoQueue = [];
+      this.showFrame(0);
+    },
+    extendPlayback(finalState) {
+      const history = Array.isArray(finalState?.history) ? finalState.history : [];
+      const nextFrames = history.length ? history : [finalState];
+      const previousLength = this.frames.length;
+      this.finalState = finalState;
+      this.frames = nextFrames;
+      if (previousLength <= 0) {
+        this.playIndex = 0;
+        this.showFrame(0);
+        return 0;
+      }
+      this.playIndex = Math.max(0, Math.min(previousLength - 1, this.frames.length - 1));
+      this.state = this.frames[this.playIndex] || finalState;
+      this.$nextTick(this.render);
+      return Math.max(0, Math.min(previousLength, this.frames.length - 1));
+    },
+    showFrame(index) {
+      if (!this.frames.length) {
+        return;
+      }
+      const nextIndex = Math.max(0, Math.min(index, this.frames.length - 1));
+      this.playIndex = nextIndex;
+      this.applyState(this.frames[nextIndex]);
+      if (nextIndex >= this.frames.length - 1) {
+        this.playing = false;
+        this.clearTimer();
+        this.statusText = this.finalState?.result || this.state?.result || "done";
+      } else {
+        this.statusText = "playing";
+      }
+    },
+    showBossSequence(events) {
+      this.clearBossVideoTimer();
+      this.bossVideoQueue = events.slice();
+      this.playNextBossVideo();
+    },
+    playNextBossVideo() {
+      const event = this.bossVideoQueue.shift();
+      if (!event) {
+        this.bossOverlay = false;
+        return;
+      }
+      this.showBoss(event);
+    },
+    showBoss(event) {
+      this.bossOverlay = true;
+      this.bossDetail = event;
+      const videoIndex = ((Number(event.encounter_order || 1) - 1) % 7) + 1;
+      this.clearBossVideoTimer();
+      this.bossVideoSrc = `/resources/${videoIndex}.mp4`;
+      this.bossVideoTitle = `Boss #${event.encounter_order || 1} · 第 ${event.attempt || 1} 次 · ${event.result === "win" ? "胜利" : "失败"}`;
+      this.$nextTick(() => {
+        this.playBossVideo(event);
+      });
+    },
+    playBossVideo(event) {
+      const video = this.$refs.bossVideo;
+      if (!video) {
+        return;
+      }
+      const rounds = event.rounds?.length || event.rounds_used || 1;
+      const targetMs = Math.max(1800, Math.min(9000, 800 + rounds * Math.max(this.speed, 80) * 1.8));
+      const close = () => {
+        this.playNextBossVideo();
+      };
+      const configure = () => {
+        const durationMs = Number.isFinite(video.duration) && video.duration > 0 ? video.duration * 1000 : targetMs;
+        video.playbackRate = Math.min(4, Math.max(0.25, durationMs / targetMs));
+        video.currentTime = 0;
+        video.play().catch(() => {});
+      };
+      video.onloadedmetadata = configure;
+      video.onended = close;
+      if (video.readyState >= 1) {
+        configure();
+      }
+      this.bossVideoTimer = window.setTimeout(close, targetMs + 220);
+    },
+    formatEventMessage(event) {
+      if (event.type === "boss") {
+        const before = event.value_before ?? event.coins_before;
+        const after = event.value_after ?? event.coins_after;
+        return `Boss #${event.encounter_order} 第 ${event.attempt || 1} 次: ${event.message}, ${event.total_damage}/${event.initial_health} damage, 价值 ${before}→${after}`;
+      }
+      return event.message || event.type;
+    },
+    formatCooldowns(values) {
+      if (!Array.isArray(values) || !values.length) {
+        return "-";
+      }
+      return values.map((value, idx) => `#${idx + 1}:${value}`).join(" ");
+    },
+    initBossSourceMode() {
+      if (this.mapHasBossArray) {
+        this.bossSourceMode = "map";
+      } else {
+        this.bossSourceMode = "manual";
+      }
+      this.resetManualBossStream();
+    },
+    setBossSourceMode(mode) {
+      if (mode === "map" && !this.mapHasBossArray) {
+        this.statusText = "当前地图没有 Boss 血量数组";
+        return;
+      }
+      this.bossSourceMode = mode;
+    },
+    resetManualBossStream() {
+      this.manualBossHealthDraft = null;
+      this.manualBossHealths = [];
+      this.manualBossHealthsSent = 0;
+      this.manualBossInputClosed = false;
+      this.manualBossStreamStatus = "";
+    },
+    readManualBossDraft() {
+      const health = Number(this.manualBossHealthDraft);
+      if (!Number.isFinite(health) || health <= 0) {
+        throw new Error("请输入当前 Boss 的血量，且必须大于 0");
+      }
+      return Math.floor(health);
+    },
+    hasManualBossDraft() {
+      return this.manualBossHealthDraft !== null && this.manualBossHealthDraft !== "" && this.manualBossHealthDraft !== undefined;
+    },
+    async fightManualBoss() {
+      if (this.bossSourceMode !== "manual" || this.manualBossInputClosed || this.busy) {
+        return;
+      }
+      const health = this.readManualBossDraft();
+      this.manualBossHealths.push(health);
+      this.manualBossHealthDraft = null;
+      this.manualBossStreamStatus = `已输入 Boss #${this.manualBossHealths.length}，正在接着当前进度试打`;
+      await this.runManualBossSequence({ finalInput: false });
+    },
+    async finishManualBossInput() {
+      if (this.bossSourceMode !== "manual" || this.busy) {
+        return;
+      }
+      if (this.hasManualBossDraft()) {
+        const health = this.readManualBossDraft();
+        this.manualBossHealths.push(health);
+        this.manualBossHealthDraft = null;
+      } else if (!this.manualBossHealths.length) {
+        const health = this.readManualBossDraft();
+        this.manualBossHealths.push(health);
+        this.manualBossHealthDraft = null;
+      }
+      this.manualBossInputClosed = true;
+      if (this.manualBossHealthsSent >= this.manualBossHealths.length && this.state?.result === "win") {
+        this.manualBossStreamStatus = "输入结束：已成功打完";
+        return;
+      }
+      this.manualBossStreamStatus = "输入结束，正在按剩余 Boss 序列继续规划";
+      await this.runManualBossSequence({ finalInput: true });
+    },
+    async runManualBossSequence({ finalInput }) {
+      this.busy = true;
+      this.clearTimer();
+      try {
+        let data = await this.startOrAppendManualBoss({ revealAll: finalInput, finalInput });
+        let result = data.state?.result || "done";
+        let won = result === "win";
+        if (!finalInput && !won) {
+          this.manualBossInputClosed = true;
+          this.manualBossStreamStatus = "当前输入序列未打过，正在按已知血量序列重新规划";
+          data = await this.restartManualBossRun({ revealAll: true });
+          result = data.state?.result || "done";
+          won = result === "win";
+        }
+        this.sessionId = data.session_id;
+        this.currentMap = this.selectedMap;
+        if (data.appended) {
+          const nextIndex = this.extendPlayback(data.state);
+          if (Number.isInteger(nextIndex)) {
+            this.playIndex = Math.max(0, nextIndex - 1);
+          }
+        } else {
+          this.eventLog = [];
+          this.loadPlayback(data.state);
+        }
+        if (finalInput || !won) {
+          this.manualBossInputClosed = true;
+        }
+        this.manualBossStreamStatus = finalInput
+          ? `输入结束：${won ? "已成功打完" : "未打过，已按完整序列继续规划"}`
+          : `Boss #${this.manualBossHealths.length} ${won ? "已打过，可继续输入下一个 Boss" : "未打过，可结束输入后按已知序列规划"}`;
+        if (this.frames.length > 1) {
+          this.playing = true;
+          this.statusText = "playing";
+          this.scheduleStep();
+        } else {
+          this.statusText = result;
+        }
+      } catch (err) {
+        this.statusText = err.message;
+        this.manualBossStreamStatus = err.message;
+      } finally {
+        this.busy = false;
+      }
+    },
+    async startOrAppendManualBoss({ revealAll = false, finalInput = false } = {}) {
+      if (this.bossSourceMode !== "manual") {
+        return null;
+      }
+      if (!this.manualBossInputClosed && this.hasManualBossDraft()) {
+        const health = this.readManualBossDraft();
+        this.manualBossHealths.push(health);
+        this.manualBossHealthDraft = null;
+      }
+      if (!this.manualBossHealths.length) {
+        const health = this.readManualBossDraft();
+        this.manualBossHealths.push(health);
+        this.manualBossHealthDraft = null;
+      }
+      const pending = this.manualBossHealths.slice(this.manualBossHealthsSent);
+      if (!pending.length) {
+        if (finalInput && this.state) {
+          this.manualBossInputClosed = true;
+          this.manualBossStreamStatus = "输入结束：没有新的 Boss，保持当前结果";
+          return { session_id: this.sessionId, state: this.finalState || this.state, appended: true };
+        }
+        throw new Error("请先输入新的 Boss 血量");
+      }
+      const firstRun = !this.sessionId;
+      const data = firstRun
+        ? await mazeApi.startRunSim(
+            this.selectedMap,
+            this.selectedAgent,
+            undefined,
+            this.manualBossPayload({ revealAll })
+          )
+        : await mazeApi.appendBosses(this.sessionId, pending, revealAll);
+      this.manualBossHealthsSent = this.manualBossHealths.length;
+      return { ...data, appended: !firstRun };
+    },
+    async restartManualBossRun({ revealAll }) {
+      if (this.sessionId) {
+        await mazeApi.deleteSim(this.sessionId);
+        this.sessionId = "";
+      }
+      this.manualBossHealthsSent = 0;
+      const data = await mazeApi.startRunSim(
+        this.selectedMap,
+        this.selectedAgent,
+        undefined,
+        this.manualBossPayload({ revealAll })
+      );
+      this.manualBossHealthsSent = this.manualBossHealths.length;
+      return { ...data, appended: false };
+    },
+    bossSetupPayload({ revealAll = false } = {}) {
+      if (this.bossSourceMode === "map") {
+        if (!this.mapHasBossArray) {
+          throw new Error("当前地图没有 Boss 血量数组，请选择手动输入");
+        }
+        return { boss_source: "map" };
+      }
+      if (!this.manualBossHealths.length) {
+        throw new Error("请先输入至少一个 Boss 血量");
+      }
+      const healths = this.manualBossHealths.map((value) => Number(value));
+      if (healths.some((value) => !Number.isFinite(value) || value <= 0)) {
+        throw new Error("Boss 血量必须全部大于 0");
+      }
+      return {
+        boss_source: "manual",
+        boss_count: healths.length,
+        boss_healths: healths,
+        boss_healths_revealed: revealAll,
+      };
+    },
+    manualBossPayload({ revealAll = false } = {}) {
+      return this.bossSetupPayload({ revealAll });
+    },
+    countBossCells(maze) {
+      return maze.reduce((total, row) => total + row.filter((cell) => cell === "B").length, 0);
+    },
+    render() {
+      renderMaze(this.$refs.mazeCanvas, this.state, this.travelledPath);
+    },
+  },
+}).mount("#app");

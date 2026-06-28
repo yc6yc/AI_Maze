@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Maze Visualizer</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=20260628-20" />
+  </head>
+  <body>
+    <div id="app" class="app-shell" :class="{ 'login-mode': !loggedIn }" v-cloak>
+      <div class="void-bg" aria-hidden="true">
+        <span class="glow-orb orb-magenta"></span>
+        <span class="glow-orb orb-cyan"></span>
+        <span class="glow-orb orb-gold"></span>
+        <span v-for="n in 40" :key="n" class="particle" :style="particleStyle(n)"></span>
+      </div>
+      <div class="scanlines" aria-hidden="true"></div>
+      <div class="chroma" aria-hidden="true"></div>
+
+      <section v-if="!loggedIn" class="login-screen" @pointerdown="enableIntroAudio">
+        <video ref="introVideo" class="login-bg-video" autoplay loop playsinline preload="auto">
+          <source src="/resources/%E8%83%8C%E6%99%AF.mp4" type="video/mp4" />
+        </video>
+        <div class="login-vignette" aria-hidden="true"></div>
+        <div class="login-menu">
+          <div class="login-menu-actions">
+            <button class="login-start-btn" type="button" @click="login">开始游戏</button>
+          </div>
+        </div>
+      </section>
+
+      <template v-else>
+      <header class="topbar-area glass-panel">
+        <div class="brand-block">
+          <span class="brand-mark"></span>
+          <div>
+            <h1>AI MAZE VISUALIZER</h1>
+            <p>{{ currentMap || selectedMap || "sample.json" }} · {{ selectedAgent }} · {{ statusText }}</p>
+          </div>
+        </div>
+        <div class="top-actions">
+          <select v-model="selectedMap" @change="handleMapChange">
+            <option v-for="map in maps" :key="map" :value="map">{{ map }}</option>
+          </select>
+          <select v-model="selectedAgent" @change="resetSession">
+            <option value="hybrid">Hybrid</option>
+            <option value="local">Original Fog Planner</option>
+            <option value="local_3x3">3x3 Local Greedy</option>
+            <option value="planner">Global Planner</option>
+            <option value="global_greedy">Global Greedy</option>
+            <option value="ai_global_planner">AI_Maze Global Planner</option>
+            <option value="ai_global_greedy">AI_Maze Global Greedy</option>
+            <option value="ai_composite">AI_Maze Composite</option>
+          </select>
+          <label class="file-btn">
+            导入地图
+            <input type="file" accept="application/json" @change="uploadSelectedMap" />
+          </label>
+          <button class="secondary-btn" type="button" @click="logout">返回首页</button>
+        </div>
+      </header>
+
+      <main class="game-layout">
+        <aside class="sidebar-panel left-panel glass-panel">
+          <div class="section-title">MISSION</div>
+          <div class="metrics-grid">
+            <div class="metric-tile"><span>STEP</span><strong>{{ state?.step ?? 0 }}</strong></div>
+            <div class="metric-tile"><span>VALUE</span><strong>{{ state?.value ?? state?.coins ?? 0 }}</strong></div>
+            <div class="metric-tile"><span>FRAME</span><strong>{{ playbackText }}</strong></div>
+            <div class="metric-tile"><span>SCORE</span><strong>{{ scoreText }}</strong></div>
+          </div>
+
+          <div class="panel-section">
+            <div class="section-title">BOSS SOURCE</div>
+            <div v-if="!sessionId || bossSourceMode === 'manual'" class="boss-source-box">
+              <div class="segmented-control">
+                <button type="button" class="segment" :class="{ active: bossSourceMode === 'map' }" :disabled="!!sessionId || !mapHasBossArray" @click="setBossSourceMode('map')">AUTO</button>
+                <button type="button" class="segment" :class="{ active: bossSourceMode === 'manual' }" :disabled="!!sessionId" @click="setBossSourceMode('manual')">MANUAL</button>
+              </div>
+              <template v-if="bossSourceMode === 'map'">
+                <span class="status-pill accent">地图序列</span>
+                <small>启动前不显示 Boss 数量和血量</small>
+              </template>
+              <template v-else>
+                <label>
+                  当前 Boss 血量
+                  <input type="number" min="1" step="1" v-model.number="manualBossHealthDraft" :disabled="manualBossInputClosed || busy" />
+                </label>
+                <div class="manual-stream-actions">
+                  <button class="secondary-btn" type="button" :disabled="busy || manualBossInputClosed" @click="fightManualBoss">打当前 Boss</button>
+                  <button class="secondary-btn" type="button" :disabled="busy || !manualBossHealths.length" @click="finishManualBossInput">结束输入</button>
+                </div>
+                <div v-if="manualBossHealths.length" class="known-boss-list">
+                  <small>已输入血量序列</small>
+                  <span v-for="(hp, idx) in manualBossHealths" :key="idx">#{{ idx + 1 }} HP {{ hp }}</span>
+                </div>
+                <small v-if="manualBossStreamStatus" class="manual-stream-status">{{ manualBossStreamStatus }}</small>
+              </template>
+            </div>
+            <div v-else class="boss-source-box locked">
+              <span class="status-pill">{{ state?.boss_health_source === "map" ? "地图序列" : "手动序列" }}</span>
+              <strong>已遭遇 {{ state?.encountered_bosses ?? 0 }} · 已击败 {{ state?.defeated_boss_count ?? 0 }}</strong>
+              <small v-if="state?.all_boss_healths_revealed">复活后已知全部 Boss 血量</small>
+              <div v-if="currentKnownBoss" class="known-boss-current">
+                <span>当前 Boss #{{ currentKnownBoss.order }}</span>
+                <strong>{{ currentKnownBoss.health }}</strong>
+              </div>
+              <div v-if="futureKnownBossHealths.length" class="known-boss-list">
+                <small>已知未挑战血量</small>
+                <span v-for="boss in futureKnownBossHealths" :key="boss.order">#{{ boss.order }} HP {{ boss.health }}</span>
+              </div>
+              <div v-if="defeatedBossHealths.length" class="known-boss-list">
+                <small>已击败血量记录</small>
+                <span v-for="boss in defeatedBossHealths" :key="boss.order">#{{ boss.order }} HP {{ boss.health }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel-section">
+            <div class="section-title">SKILLS</div>
+            <div v-for="(skill, idx) in state?.skills || []" :key="idx" class="skill-row">
+              <span>#{{ idx + 1 }}</span>
+              <b>{{ skill.damage }}</b>
+              <small>CD {{ skill.remaining_cooldown }}/{{ skill.cooldown }}</small>
+            </div>
+          </div>
+        </aside>
+
+        <section class="stage-area">
+          <div class="canvas-stack glass-panel">
+            <canvas ref="mazeCanvas" class="maze-canvas"></canvas>
+            <div v-if="!frames.length" class="empty-state">SELECT MAP · COMPUTE ROUTE</div>
+            <div v-if="bossOverlay" class="boss-video-overlay">
+              <video ref="bossVideo" class="boss-video" :src="bossVideoSrc" muted playsinline preload="metadata"></video>
+              <div class="boss-video-hud">
+                <span>{{ bossVideoTitle }}</span>
+                <strong>{{ bossDetail?.total_damage ?? 0 }} / {{ bossDetail?.initial_health ?? 0 }}</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="sidebar-panel right-panel glass-panel">
+          <div class="section-title">EVENT STREAM</div>
+          <ol class="event-list">
+            <li v-for="(item, idx) in eventLog" :key="idx">
+              <span>{{ item.step }}</span>
+              <p>{{ item.message }}</p>
+            </li>
+          </ol>
+
+          <section v-if="bossFlow.length" class="boss-detail">
+            <div class="section-title">BOSS FLOW</div>
+            <article v-for="attempt in bossFlow" :key="attempt.flowIndex" class="boss-card">
+              <div class="boss-summary">
+                <span>#{{ attempt.flowIndex }} · Boss #{{ attempt.encounter_order }} · 第 {{ attempt.attempt }} 次 · {{ attempt.resultText }}</span>
+                <strong>{{ attempt.total_damage }} / {{ attempt.initial_health }}</strong>
+                <small>总回合 {{ attempt.total_rounds_used ?? attempt.rounds_used }}/{{ attempt.max_rounds }} · 剩余 {{ attempt.rounds_remaining_after ?? 0 }}</small>
+                <small>价值 {{ attempt.valueBefore }} → {{ attempt.valueAfter }} · 消耗 {{ attempt.reviveCost }} 价值</small>
+                <small>{{ attempt.planningText }} · 目标 {{ attempt.planned_boss_orders?.join(", ") }}</small>
+              </div>
+              <div class="boss-attempt">
+                <div class="boss-attempt-head">
+                  <span>{{ attempt.message }}</span>
+                  <strong>{{ attempt.resultText }}</strong>
+                  <small>{{ attempt.rounds_used }} 本次回合</small>
+                </div>
+                <div class="boss-money-grid">
+                  <span>开战价值 <b>{{ attempt.valueBefore }}</b></span>
+                  <span>失败/复活消耗 <b>{{ attempt.reviveCost }}</b></span>
+                  <span>结束价值 <b>{{ attempt.valueAfter }}</b></span>
+                  <span v-if="attempt.skill_cooldowns_reset_on_revive">技能CD <b>已刷新</b></span>
+                </div>
+                <ol class="boss-round-list">
+                  <li v-for="round in attempt.rounds" :key="attempt.flowIndex + '-' + round.round">
+                    <span>R{{ round.round }}</span>
+                    <p v-if="round.action === 'attack'">
+                      {{ round.skill_label }} 造成 {{ round.damage }} 伤害，HP {{ round.hp_before }} → {{ round.hp_after }}
+                      <small>CD {{ formatCooldowns(round.cooldowns_before) }} → {{ formatCooldowns(round.cooldowns_after) }}</small>
+                    </p>
+                    <p v-else>
+                      等待冷却，HP {{ round.hp_before }}
+                      <small>CD {{ formatCooldowns(round.cooldowns_before) }} → {{ formatCooldowns(round.cooldowns_after) }}</small>
+                    </p>
+                  </li>
+                </ol>
+              </div>
+            </article>
+          </section>
+        </aside>
+      </main>
+
+      <footer class="controlbar glass-panel">
+        <button class="primary-btn" @click="enterGame" :disabled="busy">计算并播放</button>
+        <button class="secondary-btn" @click="stepOnce" :disabled="!frames.length || busy || playIndex >= frames.length - 1">单步</button>
+        <button class="secondary-btn" @click="togglePlay" :disabled="!frames.length || busy || playIndex >= frames.length - 1">{{ playing ? "暂停" : "播放" }}</button>
+        <button class="secondary-btn" @click="runAll" :disabled="!frames.length || busy || playIndex >= frames.length - 1">跳到结尾</button>
+        <button class="secondary-btn" @click="resetSession" :disabled="busy">重置</button>
+        <input type="range" min="80" max="900" step="20" v-model.number="speed" />
+        <span class="status-text">{{ statusText }}</span>
+      </footer>
+      </template>
+    </div>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="/static/js/api.js?v=20260628-23"></script>
+    <script src="/static/js/app.js?v=20260628-23"></script>
+  </body>
+</html>
