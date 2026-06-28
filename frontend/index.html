@@ -44,6 +44,8 @@
           </select>
           <select v-model="selectedAgent" @change="resetSession">
             <option value="hybrid">Hybrid</option>
+            <option value="fog_original">Fog Original (A* FOV)</option>
+            <option value="b_enhanced">Algorithm B (Enhanced)</option>
             <option value="local">Original Fog Planner</option>
             <option value="local_3x3">3x3 Local Greedy</option>
             <option value="planner">Global Planner</option>

@@ -14,15 +14,10 @@ from eval.simulator import LocalSimulator
 router = APIRouter()
 
 AGENT_REGISTRY = {
-    "hybrid",
-    "local",
-    "local_3x3",
-    "planner",
-    "global_greedy",
-    "direct_global",
-    "ai_global_greedy",
-    "ai_global_planner",
-    "ai_composite",
+    "hybrid", "local", "local_3x3", "planner",
+    "global_greedy", "direct_global",
+    "ai_global_greedy", "ai_global_planner", "ai_composite",
+    "fog_original", "b_enhanced",
 }
 _sessions: dict[str, dict] = {}
 

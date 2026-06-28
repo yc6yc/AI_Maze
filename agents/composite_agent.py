@@ -85,4 +85,10 @@ def make_agent(agent_name: str, config: dict | None = None) -> BaseAgent:
         return AIMazeGlobalPlannerAgent({**(config or {}).get("global", {}), **(config or {}).get("sim", {})})
     if normalized in {"ai_composite", "ai_maze", "ai_maze_hybrid"}:
         return AIMazeCompositeAgent(config or {})
+    if normalized in {"fog_original", "original"}:
+        from .fog_original import FogOriginalAgent
+        return FogOriginalAgent(config or {})
+    if normalized in {"b_enhanced", "global_greedy_enhanced"}:
+        from .global_greedy_enhanced import GlobalGreedyEnhancedAgent
+        return GlobalGreedyEnhancedAgent(config or {})
     raise ValueError(f"Unknown agent: {agent_name}")

@@ -162,7 +162,7 @@ createApp({
       selectedMap: "sample.json",
       selectedMapData: null,
       currentMap: "",
-      selectedAgent: "hybrid",
+      selectedAgent: "fog_original",
       bossSourceMode: "map",
       manualBossHealthDraft: null,
       manualBossHealths: [],
