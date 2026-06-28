@@ -694,9 +694,14 @@ createApp({
           await this.continueManualExploration();
           return;
         }
-        this.manualBossStreamStatus = data.state?.awaiting_boss_input
-          ? "当前 Boss 已处理，请继续输入下一个 Boss 血量，或输入 -1 结束"
-          : data.state?.result || "Boss 已处理";
+        const latestBossEvent = data.state?.boss_events?.[data.state.boss_events.length - 1];
+        if (latestBossEvent?.manual_input_required_after_revive) {
+          this.manualBossStreamStatus = "当前 Boss 未打过，已扣除复活价值，请重新输入当前 Boss 血量，或输入 -1 结束";
+        } else {
+          this.manualBossStreamStatus = data.state?.awaiting_boss_input
+            ? "当前 Boss 已处理，请继续输入下一个 Boss 血量，或输入 -1 结束"
+            : data.state?.result || "Boss 已处理";
+        }
         this.playing = true;
         this.statusText = "playing";
         this.scheduleStep();

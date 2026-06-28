@@ -320,9 +320,13 @@ class LocalSimulator:
                 value_after, actual_cost = self._consume_revive_value(value_before)
                 self.ctx.player.coins = value_after
                 can_revive = self.coin_consumption > 0 and value_after > 0
+                manual_revive_wait = self.boss_health_source == "manual" and can_revive
                 cooldowns_after_revive = [0 for _skill in self.ctx.player.skills] if can_revive else None
                 known_boss_healths_after_revive = (
-                    self._boss_health_records(known_count=len(self.boss_health_sequence), defeated_count=0)
+                    self._boss_health_records(
+                        known_count=self.defeated_boss_count if manual_revive_wait else len(self.boss_health_sequence),
+                        defeated_count=self.defeated_boss_count if manual_revive_wait else 0,
+                    )
                     if can_revive
                     else None
                 )
@@ -346,17 +350,21 @@ class LocalSimulator:
                     "coins_after": value_after,
                     "value_after": value_after,
                     "message": (
+                        "boss challenge failed, revived; waiting for manual Boss input"
+                        if manual_revive_wait
+                        else
                         "boss challenge failed, revived; restarted from Boss #1"
                         if can_revive
                         else "boss challenge failed, value exhausted"
                     ),
                     "rounds_reset_on_revive": can_revive,
-                    "boss_sequence_reset_on_revive": can_revive,
-                    "restart_boss_order": 1 if can_revive else None,
+                    "boss_sequence_reset_on_revive": can_revive and not manual_revive_wait,
+                    "restart_boss_order": None if manual_revive_wait else 1 if can_revive else None,
                     "skill_cooldowns_reset_on_revive": can_revive,
                     "cooldowns_after_revive": cooldowns_after_revive,
-                    "boss_healths_revealed_on_revive": can_revive,
+                    "boss_healths_revealed_on_revive": can_revive and not manual_revive_wait,
                     "known_boss_healths_after_revive": known_boss_healths_after_revive,
+                    "manual_input_required_after_revive": manual_revive_wait,
                 }
                 self.ctx.last_event = self.last_boss_event
                 self.boss_events.append(deepcopy(self.last_boss_event))
@@ -366,10 +374,14 @@ class LocalSimulator:
                     self.ctx.result = "lose"
                     break
                 self._reset_skill_cooldowns()
-                self.all_boss_healths_revealed = True
-                self.defeated_boss_count = 0
                 total_rounds_used = 0
                 self.boss_total_rounds_used = 0
+                if self.boss_health_source == "manual":
+                    if health_idx < len(self.boss_health_sequence):
+                        self.boss_health_sequence.pop(health_idx)
+                    return
+                self.all_boss_healths_revealed = True
+                self.defeated_boss_count = 0
                 break
 
     def _build_boss_event(

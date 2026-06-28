@@ -274,6 +274,43 @@ def test_manual_boss_healths_are_read_in_live_input_order() -> None:
     assert sim.snapshot(include_history=False)["defeated_boss_count"] == 2
 
 
+def test_manual_failed_boss_revive_waits_for_next_live_input() -> None:
+    data = {
+        "maze": [["#", "#", "#", "#", "#"], ["#", "S", "B", "E", "#"], ["#", "#", "#", "#", "#"]],
+        "PlayerSkills": [[10, 0]],
+        "minRouds": 1,
+        "CoinConsumption": 15,
+    }
+    sim = LocalSimulator(data, boss_source="manual")
+    sim.ctx.player.coins = 40
+
+    state = sim.step(Action(move="RIGHT"))
+    assert state["awaiting_boss_input"] is True
+
+    state = sim.submit_manual_boss_health(100)
+    failed = state["boss_events"][-1]
+    assert failed["result"] == "lose"
+    assert failed["revived"] is True
+    assert failed["revive_cost"] == 15
+    assert failed["value_before"] == 40
+    assert failed["value_after"] == 25
+    assert failed["manual_input_required_after_revive"] is True
+    assert failed["boss_sequence_reset_on_revive"] is False
+    assert failed["restart_boss_order"] is None
+    assert state["awaiting_boss_input"] is True
+    assert state["value"] == 25
+    assert state["defeated_boss_count"] == 0
+    assert sim.boss_health_sequence == []
+
+    state = sim.submit_manual_boss_health(5)
+    won = state["boss_events"][-1]
+    assert won["result"] == "win"
+    assert won["initial_health"] == 5
+    assert state["awaiting_boss_input"] is True
+    assert state["value"] == 25
+    assert state["defeated_boss_count"] == 1
+
+
 def test_map_boss_array_is_isolated_from_manual_healths() -> None:
     data = {
         "maze": [["#", "#", "#", "#"], ["#", "S", "B", "E"], ["#", "#", "#", "#"]],
