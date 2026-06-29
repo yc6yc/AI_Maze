@@ -10,6 +10,7 @@ def test_ensemble_start_run_returns_best_candidate_playback() -> None:
 
         assert ensemble["selected_agent"] in ENSEMBLE_CANDIDATE_AGENTS
         assert set(ENSEMBLE_CANDIDATE_AGENTS).issubset(candidate_agents)
+        assert "online_planner" in candidate_agents
         assert state["ensemble_result"]["selected_agent"] == ensemble["selected_agent"]
         assert len(state["history"]) > 1
     finally:

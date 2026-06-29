@@ -85,4 +85,7 @@ def make_agent(agent_name: str, config: dict | None = None) -> BaseAgent:
     if normalized in {"b_enhanced", "global_greedy_enhanced"}:
         from .global_greedy_enhanced import GlobalGreedyEnhancedAgent
         return GlobalGreedyEnhancedAgent(config or {})
+    if normalized in {"online_planner", "online_maze", "online_maze_planner"}:
+        from .online_maze_agent import OnlineMazePlanningAgent
+        return OnlineMazePlanningAgent(config or {})
     raise ValueError(f"Unknown agent: {agent_name}")

@@ -1,5 +1,6 @@
 import pytest
 
+from agents.composite_agent import make_agent
 from core.state import Action, Skill
 from eval.simulator import LocalSimulator, simulate_boss_battle
 
@@ -17,6 +18,14 @@ def test_simulator_reveals_initial_fov_and_collects_coin() -> None:
     sim.step(Action(move="RIGHT"))
     assert sim.ctx.player.coins == 50
     assert sim.ground_truth[1][2] == " "
+
+
+def test_online_planner_can_run_in_simulator() -> None:
+    sim = LocalSimulator.from_json("sample.json")
+    summary = sim.run(make_agent("online_planner", {}))
+
+    assert summary["total_steps"] > 0
+    assert summary["result"] in {"win", "lose", "timeout", "running"}
 
 
 def test_exit_requires_boss_defeated() -> None:

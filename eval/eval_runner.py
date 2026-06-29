@@ -14,6 +14,7 @@ AGENT_REGISTRY = {
     "local": lambda config: make_agent("local", config),
     "planner": lambda config: make_agent("planner", config),
     "global_greedy": lambda config: make_agent("global_greedy", config),
+    "online_planner": lambda config: make_agent("online_planner", config),
     "ai_global_greedy": lambda config: make_agent("ai_global_greedy", config),
     "ai_global_planner": lambda config: make_agent("ai_global_planner", config),
     "fog_original": lambda config: make_agent("fog_original", config),
@@ -36,7 +37,7 @@ def run_eval(
 ) -> dict[str, Any]:
     config = config or {}
     selected_maps = maps or list_maps()
-    selected_agents = agents or ["hybrid", "fog_original", "b_enhanced", "local", "planner", "global_greedy"]
+    selected_agents = agents or ["hybrid", "fog_original", "b_enhanced", "local", "planner", "global_greedy", "online_planner"]
     sim_cfg = config.get("sim", {})
     results: list[dict[str, Any]] = []
 

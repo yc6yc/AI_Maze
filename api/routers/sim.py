@@ -21,6 +21,7 @@ ENSEMBLE_CANDIDATE_AGENTS = [
     "local",
     "planner",
     "global_greedy",
+    "online_planner",
     "ai_global_planner",
     "ai_global_greedy",
 ]
@@ -29,7 +30,7 @@ AGENT_REGISTRY = {
     "hybrid", "local", "planner",
     "global_greedy", "direct_global",
     "ai_global_greedy", "ai_global_planner",
-    "fog_original", "b_enhanced", ENSEMBLE_AGENT,
+    "fog_original", "b_enhanced", "online_planner", ENSEMBLE_AGENT,
 }
 _sessions: dict[str, dict] = {}
 
