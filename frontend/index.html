@@ -199,7 +199,7 @@
         <button class="secondary-btn" @click="stepOnce" :disabled="!frames.length || busy || playIndex >= frames.length - 1">单步</button>
         <button class="secondary-btn" @click="togglePlay" :disabled="!frames.length || busy || playIndex >= frames.length - 1">{{ playing ? "暂停" : "播放" }}</button>
         <button class="secondary-btn" @click="runAll" :disabled="!frames.length || busy || playIndex >= frames.length - 1">跳到结尾</button>
-        <button class="secondary-btn" @click="resetSession" :disabled="busy">重置</button>
+        <button class="secondary-btn" @click="downloadOutput" :disabled="!finalState">下载输出</button>
         <input type="range" min="80" max="900" step="20" v-model.number="speed" />
         <span class="status-text">{{ statusText }}</span>
       </footer>

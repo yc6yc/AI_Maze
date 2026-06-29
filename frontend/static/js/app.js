@@ -578,6 +578,51 @@ createApp({
       }
       return values.map((value, idx) => `#${idx + 1}:${value}`).join(" ");
     },
+    downloadOutput() {
+      if (!this.finalState) return;
+      const fs = this.finalState;
+      const history = Array.isArray(fs.history) ? fs.history : [];
+      const path = history.map(h => h.pos);
+      if (!path.length && fs.pos) path.push(fs.pos);
+      const deduped = [];
+      for (let i = 0; i < path.length; i++) {
+        if (i === 0 || path[i][0] !== deduped[deduped.length - 1][0] || path[i][1] !== deduped[deduped.length - 1][1]) {
+          deduped.push([...path[i]]);
+        }
+      }
+      const moveSteps = Math.max(0, deduped.length - 1);
+      const finalCoin = fs.value ?? fs.coins ?? 0;
+      const bossEvents = Array.isArray(fs.boss_events) ? fs.boss_events : [];
+      const bossWon = bossEvents.length > 0 ? bossEvents.some(e => e.result === 'win') : false;
+      const totalTurns = bossEvents.reduce((s, e) => s + (e.total_rounds_used ?? e.rounds_used ?? 0), 0);
+      const reviveCount = bossEvents.reduce((s, e) => s + (e.result === 'lose' ? 1 : 0), 0);
+      const coinCost = bossEvents.reduce((s, e) => s + (e.revive_cost ?? e.revive?.cost ?? 0), 0);
+      const skillSeqs = [];
+      const skillSeqLens = [];
+      for (const bf of this.bossFlow) {
+        const rounds = Array.isArray(bf.rounds) ? bf.rounds : [];
+        const seq = rounds.filter(r => r.action === 'attack').map(r => typeof r.skill_index === 'number' ? r.skill_index : -1);
+        if (seq.length) { skillSeqs.push(seq); skillSeqLens.push(seq.length); }
+      }
+      const output = {
+        success: fs.result === 'win',
+        path: deduped, path_length: deduped.length, move_steps: moveSteps,
+        final_coin: finalCoin,
+        coin_step_ratio: (fs.result === 'win' && moveSteps > 0) ? finalCoin / moveSteps : 0,
+        boss_success: bossWon, boss_total_turns: totalTurns,
+        boss_revive_count: reviveCount, boss_coin_cost: coinCost,
+        boss_skill_sequence_lengths: skillSeqLens, boss_skill_sequences: skillSeqs
+      };
+      const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `output_result_${this.selectedAgent}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    },
     initBossSourceMode() {
       if (this.mapHasBossArray) {
         this.bossSourceMode = "map";
