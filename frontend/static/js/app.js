@@ -186,6 +186,7 @@ createApp({
       bossVideoTitle: "BOSS ENCOUNTER",
       bossVideoTimer: null,
       bossVideoQueue: [],
+      activeBgm: "",
     };
   },
   computed: {
@@ -255,6 +256,7 @@ createApp({
   beforeUnmount() {
     window.removeEventListener("resize", this.render);
     this.clearTimer();
+    this.stopBgm();
   },
   methods: {
     startIntroVideo() {
@@ -287,7 +289,44 @@ createApp({
       storageRemove("ai_maze_started");
       storageRemove("ai_maze_logged_in");
       this.loggedIn = false;
+      this.stopBgm();
       await this.resetSession();
+    },
+    audioRef(name) {
+      return this.$refs[name] || null;
+    },
+    playAudio(audio, volume = 0.6) {
+      if (!audio) {
+        return;
+      }
+      audio.volume = volume;
+      audio.loop = true;
+      audio.play().catch(() => {});
+    },
+    pauseAudio(audio) {
+      if (!audio) {
+        return;
+      }
+      audio.pause();
+    },
+    playMazeBgm() {
+      const mazeAudio = this.audioRef("mazeBgm");
+      const bossAudio = this.audioRef("bossBgm");
+      this.pauseAudio(bossAudio);
+      this.playAudio(mazeAudio, 0.52);
+      this.activeBgm = "maze";
+    },
+    playBossBgm() {
+      const mazeAudio = this.audioRef("mazeBgm");
+      const bossAudio = this.audioRef("bossBgm");
+      this.pauseAudio(mazeAudio);
+      this.playAudio(bossAudio, 0.68);
+      this.activeBgm = "boss";
+    },
+    stopBgm() {
+      this.pauseAudio(this.audioRef("mazeBgm"));
+      this.pauseAudio(this.audioRef("bossBgm"));
+      this.activeBgm = "";
     },
     particleStyle(n) {
       const left = (n * 37) % 100;
@@ -364,6 +403,7 @@ createApp({
       }
       this.busy = true;
       this.clearTimer();
+      this.playMazeBgm();
       try {
         if (this.sessionId) {
           await mazeApi.deleteSim(this.sessionId);
@@ -409,6 +449,9 @@ createApp({
       this.clearTimer();
       this.clearBossVideoTimer();
       this.playing = false;
+      if (this.loggedIn) {
+        this.playMazeBgm();
+      }
       if (this.sessionId) {
         try {
           await mazeApi.deleteSim(this.sessionId);
@@ -433,6 +476,7 @@ createApp({
     togglePlay() {
       this.playing = !this.playing;
       if (this.playing) {
+        this.playMazeBgm();
         this.scheduleStep();
       } else {
         this.clearTimer();
@@ -520,12 +564,16 @@ createApp({
     showBossSequence(events) {
       this.clearBossVideoTimer();
       this.bossVideoQueue = events.slice();
+      this.playBossBgm();
       this.playNextBossVideo();
     },
     playNextBossVideo() {
       const event = this.bossVideoQueue.shift();
       if (!event) {
         this.bossOverlay = false;
+        if (this.loggedIn) {
+          this.playMazeBgm();
+        }
         return;
       }
       this.showBoss(event);
@@ -682,6 +730,7 @@ createApp({
     async startManualExploration() {
       this.busy = true;
       this.clearTimer();
+      this.playMazeBgm();
       try {
         if (this.sessionId) {
           await mazeApi.deleteSim(this.sessionId);

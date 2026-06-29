@@ -8,6 +8,8 @@
   </head>
   <body>
     <div id="app" class="app-shell" :class="{ 'login-mode': !loggedIn }" v-cloak>
+      <audio ref="mazeBgm" src="/resources/bgm/%E8%B5%B0%E8%BF%B7%E5%AE%AB.m4a" preload="auto" loop></audio>
+      <audio ref="bossBgm" src="/resources/bgm/boss%E6%88%98.m4a" preload="auto" loop></audio>
       <div class="void-bg" aria-hidden="true">
         <span class="glow-orb orb-magenta"></span>
         <span class="glow-orb orb-cyan"></span>
@@ -207,7 +209,7 @@
     </div>
 
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-    <script src="/static/js/api.js?v=20260628-25"></script>
-    <script src="/static/js/app.js?v=20260628-25"></script>
+    <script src="/static/js/api.js?v=20260629-02"></script>
+    <script src="/static/js/app.js?v=20260629-02"></script>
   </body>
 </html>
