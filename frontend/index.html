@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI Maze Visualizer</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20260628-20" />
+    <link rel="stylesheet" href="/static/css/style.css?v=20260630-02" />
   </head>
   <body>
     <div id="app" class="app-shell" :class="{ 'login-mode': !loggedIn }" v-cloak>
@@ -46,15 +46,14 @@
           </select>
           <select v-model="selectedAgent" @change="resetSession">
             <option value="hybrid">Hybrid</option>
+            <option value="ensemble">Ensemble Algorithm</option>
             <option value="fog_original">Fog Original (A* FOV)</option>
             <option value="b_enhanced">Algorithm B (Enhanced)</option>
             <option value="local">Original Fog Planner</option>
-            <option value="local_3x3">3x3 Local Greedy</option>
             <option value="planner">Global Planner</option>
             <option value="global_greedy">Global Greedy</option>
             <option value="ai_global_planner">AI_Maze Global Planner</option>
             <option value="ai_global_greedy">AI_Maze Global Greedy</option>
-            <option value="ai_composite">AI_Maze Composite</option>
           </select>
           <label class="file-btn">
             导入地图
@@ -74,6 +73,18 @@
             <div class="metric-tile"><span>SCORE</span><strong>{{ scoreText }}</strong></div>
           </div>
 
+          <div v-if="ensembleResult" class="panel-section ensemble-box">
+            <div class="section-title">ENSEMBLE BEST</div>
+            <span class="status-pill accent">{{ ensembleResult.selected_agent }}</span>
+            <strong>{{ formatScore(ensembleResult.selected_score) }}</strong>
+            <small>{{ ensembleResult.selected_result }} · VALUE {{ ensembleResult.selected_total_value }} · STEP {{ ensembleResult.selected_total_steps }}</small>
+            <div class="ensemble-candidates">
+              <span v-for="candidate in ensembleResult.candidates" :key="candidate.agent">
+                {{ candidate.agent }} · {{ candidate.error ? "ERR" : formatScore(candidate.score) }}
+              </span>
+            </div>
+          </div>
+
           <div class="panel-section">
             <div class="section-title">BOSS SOURCE</div>
             <div v-if="!sessionId || bossSourceMode === 'manual'" class="boss-source-box">
@@ -89,11 +100,12 @@
                 <button class="secondary-btn" type="button" :disabled="busy || !!sessionId" @click="startManualExploration">开始按算法探索</button>
                 <label>
                   当前 Boss 血量 / -1 结束
-                  <input type="number" step="1" v-model.number="manualBossHealthDraft" :disabled="busy || !state?.awaiting_boss_input" @keyup.enter="fightManualBoss" />
+                  <input type="number" step="1" v-model.number="manualBossHealthDraft" :disabled="busy || !state?.awaiting_boss_input || state?.manual_boss_replan_required" @keyup.enter="fightManualBoss" />
                 </label>
                 <div class="manual-stream-actions">
-                  <button class="secondary-btn" type="button" :disabled="busy || !state?.awaiting_boss_input" @click="fightManualBoss">提交并打当前 Boss</button>
-                  <button class="secondary-btn" type="button" :disabled="busy || !state?.awaiting_boss_input" @click="finishManualBossInput">输入 -1 结束</button>
+                  <button class="secondary-btn" type="button" :disabled="busy || !state?.awaiting_boss_input || state?.manual_boss_replan_required" @click="fightManualBoss">提交并打当前 Boss</button>
+                  <button class="secondary-btn" type="button" :disabled="busy || !state?.awaiting_boss_input || state?.manual_boss_replan_required" @click="finishManualBossInput">输入 -1 结束</button>
+                  <button class="secondary-btn" type="button" :disabled="busy || !state?.manual_boss_replan_required" @click="replanManualBossSequence">重新规划挑战已知 Boss</button>
                 </div>
                 <div v-if="manualBossHealths.length" class="known-boss-list">
                   <small>现场已输入血量</small>
@@ -209,7 +221,7 @@
     </div>
 
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-    <script src="/static/js/api.js?v=20260629-02"></script>
-    <script src="/static/js/app.js?v=20260629-02"></script>
+    <script src="/static/js/api.js?v=20260630-02"></script>
+    <script src="/static/js/app.js?v=20260630-03"></script>
   </body>
 </html>

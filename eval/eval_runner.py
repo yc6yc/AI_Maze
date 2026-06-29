@@ -12,12 +12,10 @@ from eval.simulator import LocalSimulator
 AGENT_REGISTRY = {
     "hybrid": lambda config: make_agent("hybrid", config),
     "local": lambda config: make_agent("local", config),
-    "local_3x3": lambda config: make_agent("local_3x3", config),
     "planner": lambda config: make_agent("planner", config),
     "global_greedy": lambda config: make_agent("global_greedy", config),
     "ai_global_greedy": lambda config: make_agent("ai_global_greedy", config),
     "ai_global_planner": lambda config: make_agent("ai_global_planner", config),
-    "ai_composite": lambda config: make_agent("ai_composite", config),
     "fog_original": lambda config: make_agent("fog_original", config),
     "b_enhanced": lambda config: make_agent("b_enhanced", config),
 }
@@ -38,7 +36,7 @@ def run_eval(
 ) -> dict[str, Any]:
     config = config or {}
     selected_maps = maps or list_maps()
-    selected_agents = agents or ["hybrid", "fog_original", "b_enhanced", "local", "local_3x3", "planner", "global_greedy", "ai_composite"]
+    selected_agents = agents or ["hybrid", "fog_original", "b_enhanced", "local", "planner", "global_greedy"]
     sim_cfg = config.get("sim", {})
     results: list[dict[str, Any]] = []
 

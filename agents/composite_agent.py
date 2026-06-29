@@ -2,14 +2,12 @@ from __future__ import annotations
 
 from core.state import Action, GameContext, Move
 
-from .ai_maze_composite import AIMazeCompositeAgent
 from .ai_maze_global_greedy import AIMazeGlobalGreedyAgent
 from .ai_maze_global_planner import AIMazeGlobalPlannerAgent
 from .base import BaseAgent
 from .combat_agent import CombatAgent
 from .global_greedy import GlobalGreedyAgent
 from .global_planner import GlobalPlannerAgent, PlannerPhase
-from .local_3x3_greedy import Local3x3GreedyAgent
 from .local_greedy_policy import LocalGreedyAgent
 
 
@@ -73,8 +71,6 @@ def make_agent(agent_name: str, config: dict | None = None) -> BaseAgent:
         return CompositeAgent(config or {})
     if normalized == "local":
         return LocalGreedyAgent((config or {}).get("local", {}))
-    if normalized in {"local_3x3", "local_greedy_3x3"}:
-        return Local3x3GreedyAgent((config or {}).get("local", {}))
     if normalized == "planner":
         return GlobalPlannerAgent((config or {}).get("global", {}))
     if normalized in {"global_greedy", "direct_global"}:
@@ -83,8 +79,6 @@ def make_agent(agent_name: str, config: dict | None = None) -> BaseAgent:
         return AIMazeGlobalGreedyAgent({**(config or {}).get("global", {}), **(config or {}).get("local", {})})
     if normalized in {"ai_global_planner", "ai_maze_global_planner"}:
         return AIMazeGlobalPlannerAgent({**(config or {}).get("global", {}), **(config or {}).get("sim", {})})
-    if normalized in {"ai_composite", "ai_maze", "ai_maze_hybrid"}:
-        return AIMazeCompositeAgent(config or {})
     if normalized in {"fog_original", "original"}:
         from .fog_original import FogOriginalAgent
         return FogOriginalAgent(config or {})

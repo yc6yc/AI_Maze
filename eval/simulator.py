@@ -78,6 +78,7 @@ class LocalSimulator:
         self.awaiting_boss_input = False
         self.pending_boss_pos: Position | None = None
         self.manual_boss_input_closed = False
+        self.manual_boss_replan_required = False
         self.min_rounds = int(data.get("minRouds", 20))
         self.coin_consumption = int(data.get("CoinConsumption", 0))
         self.boss_handler = boss_handler
@@ -156,6 +157,8 @@ class LocalSimulator:
             raise ValueError("The player is not waiting for manual Boss input")
         if self.ctx.done and self.ctx.result == "lose":
             raise ValueError("Cannot submit Boss health after the run has failed")
+        if self.manual_boss_replan_required:
+            raise ValueError("Known Bosses must be replanned before adding another Boss health")
         if boss_health <= 0:
             raise ValueError("Boss health must be greater than 0")
 
@@ -171,10 +174,56 @@ class LocalSimulator:
         self._handle_boss(self.pending_boss_pos)
         if not self.ctx.done:
             self.awaiting_boss_input = True
+            if self.manual_boss_replan_required:
+                self.ctx.last_event = {
+                    "type": "manual_boss_replan_required",
+                    "pos": list(self.pending_boss_pos),
+                    "message": "known Boss sequence exceeded round limit; replan before entering another Boss",
+                    "known_boss_count": len(self.boss_health_sequence),
+                }
+            else:
+                self.ctx.last_event = {
+                    "type": "boss_input_required",
+                    "pos": list(self.pending_boss_pos),
+                    "message": "waiting for next Boss health; input -1 to finish",
+                    "known_boss_count": len(self.boss_health_sequence),
+                }
+        self._append_snapshot(self.ctx.last_event)
+        return self.snapshot()
+
+    def replan_manual_boss_sequence(self) -> dict[str, Any]:
+        if self.boss_health_source != "manual":
+            raise ValueError("Manual Boss replan can only be used in manual boss mode")
+        if not self.awaiting_boss_input or self.pending_boss_pos is None:
+            raise ValueError("The player is not waiting for manual Boss input")
+        if self.ctx.done and self.ctx.result == "lose":
+            raise ValueError("Cannot replan Boss sequence after the run has failed")
+        if not self.manual_boss_replan_required:
+            raise ValueError("There is no manual Boss sequence waiting for replan")
+        if not self.boss_health_sequence:
+            raise ValueError("There are no known Boss healths to replan")
+
+        self.awaiting_boss_input = False
+        self.manual_boss_input_closed = False
+        self.all_boss_healths_revealed = True
+        self.defeated_boss_count = 0
+        self.ctx.boss_defeated = False
+        self.boss_total_rounds_used = 0
+        self._reset_skill_cooldowns()
+        self.ctx.last_event = None
+        self.last_boss_event = None
+
+        self._handle_boss(self.pending_boss_pos)
+        if not self.ctx.done:
+            self.awaiting_boss_input = True
             self.ctx.last_event = {
-                "type": "boss_input_required",
+                "type": "manual_boss_replan_required" if self.manual_boss_replan_required else "boss_input_required",
                 "pos": list(self.pending_boss_pos),
-                "message": "waiting for next Boss health; input -1 to finish",
+                "message": (
+                    "known Boss sequence still exceeded round limit; replan again or value will eventually run out"
+                    if self.manual_boss_replan_required
+                    else "known Boss sequence replanned successfully; waiting for next Boss health"
+                ),
                 "known_boss_count": len(self.boss_health_sequence),
             }
         self._append_snapshot(self.ctx.last_event)
@@ -189,6 +238,8 @@ class LocalSimulator:
             raise ValueError("Cannot finish Boss input after the run has failed")
         if self.defeated_boss_count < len(self.boss_health_sequence):
             raise ValueError("Known Bosses must be defeated before input can be finished")
+        if self.manual_boss_replan_required:
+            raise ValueError("Known Bosses must be replanned before input can be finished")
 
         pos = self.pending_boss_pos
         self.awaiting_boss_input = False
@@ -307,6 +358,8 @@ class LocalSimulator:
                     self.boss_total_rounds_used = total_rounds_used
                     self.defeated_boss_count += 1
                     self.ctx.boss_defeated = self._all_bosses_defeated()
+                    if self.boss_health_source == "manual" and self._all_bosses_defeated(target_count):
+                        self.manual_boss_replan_required = False
                     if self.boss_health_source != "manual" and self._all_bosses_defeated():
                         self._clear_boss_cells()
                     self.last_boss_event = {
@@ -322,12 +375,12 @@ class LocalSimulator:
                 value_after, actual_cost = self._consume_revive_value(value_before)
                 self.ctx.player.coins = value_after
                 can_revive = self.coin_consumption > 0 and value_after > 0
-                manual_revive_wait = self.boss_health_source == "manual" and can_revive
+                manual_replan_wait = self.boss_health_source == "manual" and can_revive
                 cooldowns_after_revive = [0 for _skill in self.ctx.player.skills] if can_revive else None
                 known_boss_healths_after_revive = (
                     self._boss_health_records(
-                        known_count=self.defeated_boss_count if manual_revive_wait else len(self.boss_health_sequence),
-                        defeated_count=self.defeated_boss_count if manual_revive_wait else 0,
+                        known_count=len(self.boss_health_sequence),
+                        defeated_count=0,
                     )
                     if can_revive
                     else None
@@ -352,21 +405,22 @@ class LocalSimulator:
                     "coins_after": value_after,
                     "value_after": value_after,
                     "message": (
-                        "boss challenge failed, revived; waiting for manual Boss input"
-                        if manual_revive_wait
+                        "known Boss sequence exceeded total round limit, revived; waiting for manual replan"
+                        if manual_replan_wait
                         else
                         "boss challenge failed, revived; restarted from Boss #1"
                         if can_revive
                         else "boss challenge failed, value exhausted"
                     ),
                     "rounds_reset_on_revive": can_revive,
-                    "boss_sequence_reset_on_revive": can_revive and not manual_revive_wait,
-                    "restart_boss_order": None if manual_revive_wait else 1 if can_revive else None,
+                    "boss_sequence_reset_on_revive": can_revive,
+                    "restart_boss_order": 1 if can_revive else None,
                     "skill_cooldowns_reset_on_revive": can_revive,
                     "cooldowns_after_revive": cooldowns_after_revive,
-                    "boss_healths_revealed_on_revive": can_revive and not manual_revive_wait,
+                    "boss_healths_revealed_on_revive": can_revive,
                     "known_boss_healths_after_revive": known_boss_healths_after_revive,
-                    "manual_input_required_after_revive": manual_revive_wait,
+                    "manual_input_required_after_revive": manual_replan_wait,
+                    "manual_replan_required_after_revive": manual_replan_wait,
                 }
                 self.ctx.last_event = self.last_boss_event
                 self.boss_events.append(deepcopy(self.last_boss_event))
@@ -379,8 +433,9 @@ class LocalSimulator:
                 total_rounds_used = 0
                 self.boss_total_rounds_used = 0
                 if self.boss_health_source == "manual":
-                    if health_idx < len(self.boss_health_sequence):
-                        self.boss_health_sequence.pop(health_idx)
+                    self.all_boss_healths_revealed = True
+                    self.defeated_boss_count = 0
+                    self.manual_boss_replan_required = True
                     self.ctx.boss_defeated = self._all_bosses_defeated()
                     return
                 self.all_boss_healths_revealed = True
@@ -631,6 +686,7 @@ class LocalSimulator:
             "awaiting_boss_input": self.awaiting_boss_input,
             "pending_boss_pos": list(self.pending_boss_pos) if self.pending_boss_pos else None,
             "manual_boss_input_closed": self.manual_boss_input_closed,
+            "manual_boss_replan_required": self.manual_boss_replan_required,
             "encountered_bosses": self.encountered_boss_count,
             "defeated_boss_count": self.defeated_boss_count,
             "all_boss_healths_revealed": self.all_boss_healths_revealed,
@@ -769,17 +825,20 @@ def _plan_boss_sequence(skills: list[Skill], healths: list[int], min_rounds: int
     max_rounds = max(min_rounds, 0)
     if not healths or max_rounds <= 0:
         return []
+
+    # Dynamic programming over battle rounds. For each layer we keep the best
+    # remaining HP reachable for a compact state: current boss + all skill CDs.
+    # At the same round, lower remaining HP dominates the same boss/CD state.
     initial_cooldowns = tuple(max(skill.remaining_cooldown, 0) for skill in skills)
-    states: dict[tuple[int, tuple[int, ...]], tuple[int, list[int | None]]] = {
+    dp: dict[tuple[int, tuple[int, ...]], tuple[int, list[int | None]]] = {
         (0, initial_cooldowns): (healths[0], [])
     }
-    best_plan: list[int | None] = []
-    best_progress = (0, healths[0])
+    best_partial: tuple[int, int, list[int | None]] = (0, healths[0], [])
 
     for _round_no in range(1, max_rounds + 1):
         next_states: dict[tuple[int, tuple[int, ...]], tuple[int, list[int | None]]] = {}
         winning_plans: list[list[int | None]] = []
-        for (boss_idx, cooldowns), (remaining_health, plan) in states.items():
+        for (boss_idx, cooldowns), (remaining_health, plan) in dp.items():
             for choice in _boss_planner_choices(skills, cooldowns):
                 new_plan = [*plan, choice]
                 new_boss_idx = boss_idx
@@ -792,29 +851,50 @@ def _plan_boss_sequence(skills: list[Skill], healths: list[int], min_rounds: int
                             winning_plans.append(new_plan)
                             continue
                         new_remaining = healths[new_boss_idx]
-                progress = (new_boss_idx, -new_remaining)
-                if progress > (best_progress[0], -best_progress[1]) or (
-                    progress == (best_progress[0], -best_progress[1]) and len(new_plan) > len(best_plan)
-                ):
-                    best_progress = (new_boss_idx, new_remaining)
-                    best_plan = new_plan
+                candidate_partial = (new_boss_idx, new_remaining, new_plan)
+                if _is_better_boss_partial(candidate_partial, best_partial):
+                    best_partial = candidate_partial
 
                 new_cooldowns = _advance_boss_cooldowns(skills, cooldowns, choice)
                 key = (new_boss_idx, new_cooldowns)
-                current = next_states.get(key)
-                if current is None or new_remaining < current[0] or (
-                    new_remaining == current[0] and _plan_tiebreak(new_plan) < _plan_tiebreak(current[1])
-                ):
-                    next_states[key] = (new_remaining, new_plan)
+                _store_boss_dp_state(next_states, key, new_remaining, new_plan)
 
         if winning_plans:
             return min(winning_plans, key=_plan_tiebreak)
         if len(next_states) > BOSS_SEQUENCE_STATE_LIMIT:
             next_states = _trim_boss_sequence_states(next_states)
-        states = next_states
-        if not states:
+        dp = next_states
+        if not dp:
             break
-    return best_plan
+    return best_partial[2]
+
+
+def _store_boss_dp_state(
+    states: dict[tuple[int, tuple[int, ...]], tuple[int, list[int | None]]],
+    key: tuple[int, tuple[int, ...]],
+    remaining_health: int,
+    plan: list[int | None],
+) -> None:
+    current = states.get(key)
+    if current is None or remaining_health < current[0] or (
+        remaining_health == current[0] and _plan_tiebreak(plan) < _plan_tiebreak(current[1])
+    ):
+        states[key] = (remaining_health, plan)
+
+
+def _is_better_boss_partial(
+    candidate: tuple[int, int, list[int | None]],
+    current: tuple[int, int, list[int | None]],
+) -> bool:
+    candidate_boss_idx, candidate_remaining, candidate_plan = candidate
+    current_boss_idx, current_remaining, current_plan = current
+    if candidate_boss_idx != current_boss_idx:
+        return candidate_boss_idx > current_boss_idx
+    if candidate_remaining != current_remaining:
+        return candidate_remaining < current_remaining
+    if len(candidate_plan) != len(current_plan):
+        return len(candidate_plan) > len(current_plan)
+    return _plan_tiebreak(candidate_plan) < _plan_tiebreak(current_plan)
 
 
 def _boss_planner_choices(skills: list[Skill], cooldowns: tuple[int, ...]) -> list[int | None]:

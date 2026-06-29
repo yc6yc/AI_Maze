@@ -1,3 +1,5 @@
+import pytest
+
 from core.state import Action, Skill
 from eval.simulator import LocalSimulator, simulate_boss_battle
 
@@ -106,6 +108,26 @@ def test_revealed_boss_sequence_planner_saves_big_skill_for_later_boss() -> None
     assert third["rounds"][0]["skill_index"] == 1
     assert fourth["planning_mode"] == "known_sequence"
     assert fourth["rounds"][0]["skill_index"] == 0
+    assert state["boss_defeated"] is True
+
+
+def test_known_boss_sequence_dp_avoids_greedy_overkill() -> None:
+    data = {
+        "maze": [["#", "#", "#", "#"], ["#", "S", "B", "E"], ["#", "#", "#", "#"]],
+        "B": [5, 9],
+        "PlayerSkills": [[9, 5], [5, 0]],
+        "minRouds": 2,
+        "CoinConsumption": 0,
+    }
+    sim = LocalSimulator(data, boss_healths_revealed=True)
+
+    state = sim.step(Action(move="RIGHT"))
+    first, second = state["boss_events"]
+
+    assert first["planning_mode"] == "known_sequence"
+    assert first["planned_boss_healths"] == [5, 9]
+    assert first["rounds"][0]["skill_index"] == 1
+    assert second["rounds"][0]["skill_index"] == 0
     assert state["boss_defeated"] is True
 
 
@@ -274,11 +296,11 @@ def test_manual_boss_healths_are_read_in_live_input_order() -> None:
     assert sim.snapshot(include_history=False)["defeated_boss_count"] == 2
 
 
-def test_manual_failed_boss_revive_waits_for_next_live_input() -> None:
+def test_manual_failed_boss_revive_requires_replan_of_known_sequence() -> None:
     data = {
         "maze": [["#", "#", "#", "#", "#"], ["#", "S", "B", "E", "#"], ["#", "#", "#", "#", "#"]],
         "PlayerSkills": [[10, 0]],
-        "minRouds": 1,
+        "minRouds": 2,
         "CoinConsumption": 15,
     }
     sim = LocalSimulator(data, boss_source="manual")
@@ -287,7 +309,12 @@ def test_manual_failed_boss_revive_waits_for_next_live_input() -> None:
     state = sim.step(Action(move="RIGHT"))
     assert state["awaiting_boss_input"] is True
 
-    state = sim.submit_manual_boss_health(100)
+    state = sim.submit_manual_boss_health(10)
+    assert state["boss_events"][-1]["result"] == "win"
+    assert state["defeated_boss_count"] == 1
+    assert state["manual_boss_replan_required"] is False
+
+    state = sim.submit_manual_boss_health(20)
     failed = state["boss_events"][-1]
     assert failed["result"] == "lose"
     assert failed["revived"] is True
@@ -295,20 +322,26 @@ def test_manual_failed_boss_revive_waits_for_next_live_input() -> None:
     assert failed["value_before"] == 40
     assert failed["value_after"] == 25
     assert failed["manual_input_required_after_revive"] is True
-    assert failed["boss_sequence_reset_on_revive"] is False
-    assert failed["restart_boss_order"] is None
+    assert failed["manual_replan_required_after_revive"] is True
+    assert failed["boss_sequence_reset_on_revive"] is True
+    assert failed["restart_boss_order"] == 1
     assert state["awaiting_boss_input"] is True
+    assert state["manual_boss_replan_required"] is True
     assert state["value"] == 25
     assert state["defeated_boss_count"] == 0
-    assert sim.boss_health_sequence == []
+    assert sim.boss_health_sequence == [10, 20]
 
-    state = sim.submit_manual_boss_health(5)
-    won = state["boss_events"][-1]
-    assert won["result"] == "win"
-    assert won["initial_health"] == 5
+    with pytest.raises(ValueError):
+        sim.submit_manual_boss_health(5)
+
+    state = sim.replan_manual_boss_sequence()
+    replanned = state["boss_events"][-1]
+    assert replanned["result"] == "lose"
+    assert replanned["manual_replan_required_after_revive"] is True
     assert state["awaiting_boss_input"] is True
-    assert state["value"] == 25
-    assert state["defeated_boss_count"] == 1
+    assert state["manual_boss_replan_required"] is True
+    assert state["value"] == 10
+    assert state["defeated_boss_count"] == 0
 
 
 def test_map_boss_array_is_isolated_from_manual_healths() -> None:

@@ -53,6 +53,9 @@
         boss_healths_revealed: !!revealAll,
       });
     },
+    replanBosses(sid) {
+      return request("POST", `/api/sim/${sid}/bosses/replan`);
+    },
     deleteSim(sid) {
       return request("DELETE", `/api/sim/${sid}`);
     },

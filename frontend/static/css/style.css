@@ -332,6 +332,11 @@ select:hover { border-color: rgba(0,229,255,0.35); color: var(--cyan); text-shad
 }
 .metric-tile span { font-size: 9px; letter-spacing: 0.1em; color: var(--text-faint); text-transform: uppercase; }
 .metric-tile strong { font-size: 18px; color: var(--text); text-shadow: 0 0 8px rgba(0,229,255,0.1); }
+.ensemble-box { display: grid; gap: 8px; padding: 10px; border-radius: 8px; border: 1px solid rgba(0,229,255,0.18); background: rgba(0,229,255,0.055); }
+.ensemble-box strong { color: var(--gold); font-size: 22px; }
+.ensemble-box small { color: var(--text-dim); font-size: 11px; }
+.ensemble-candidates { display: flex; flex-wrap: wrap; gap: 6px; }
+.ensemble-candidates span { padding: 4px 7px; border-radius: 8px; background: rgba(255,255,255,0.08); color: var(--text-dim); font-size: 11px; }
 
 .segmented-control { display: flex; border-radius: 6px; border: 1px solid var(--glass-border); overflow: hidden; margin-bottom: 8px; }
 .segment { flex: 1; min-height: 30px; border: 0; background: transparent; color: var(--text-dim); cursor: pointer; font-size: 10px; letter-spacing: 0.06em; }

@@ -162,7 +162,7 @@ createApp({
       selectedMap: "sample.json",
       selectedMapData: null,
       currentMap: "",
-      selectedAgent: "fog_original",
+      selectedAgent: "ensemble",
       bossSourceMode: "map",
       manualBossHealthDraft: null,
       manualBossHealths: [],
@@ -187,6 +187,7 @@ createApp({
       bossVideoTimer: null,
       bossVideoQueue: [],
       activeBgm: "",
+      ensembleResult: null,
     };
   },
   computed: {
@@ -416,6 +417,7 @@ createApp({
         );
         this.sessionId = data.session_id;
         this.currentMap = this.selectedMap;
+        this.ensembleResult = data.summary?.ensemble || data.state?.ensemble_result || null;
         this.eventLog = [];
         this.loadPlayback(data.state);
         if (this.frames.length > 1) {
@@ -470,6 +472,7 @@ createApp({
       this.bossOverlay = false;
       this.bossVideoSrc = "";
       this.bossVideoQueue = [];
+      this.ensembleResult = null;
       this.statusText = "ready";
       this.render();
     },
@@ -521,6 +524,7 @@ createApp({
     },
     loadPlayback(finalState) {
       this.finalState = finalState;
+      this.ensembleResult = finalState?.ensemble_result || this.ensembleResult || null;
       const history = Array.isArray(finalState?.history) ? finalState.history : [];
       this.frames = history.length ? history : [finalState];
       this.playIndex = 0;
@@ -626,6 +630,10 @@ createApp({
       }
       return values.map((value, idx) => `#${idx + 1}:${value}`).join(" ");
     },
+    formatScore(value) {
+      const number = Number(value);
+      return Number.isFinite(number) ? number.toFixed(2) : "0.00";
+    },
     downloadOutput() {
       if (!this.finalState) return;
       const fs = this.finalState;
@@ -715,14 +723,42 @@ createApp({
       }
       await this.submitManualBossInput(-1);
     },
+    async replanManualBossSequence() {
+      if (this.bossSourceMode !== "manual" || this.busy || !this.sessionId) {
+        return;
+      }
+      this.busy = true;
+      this.clearTimer();
+      try {
+        const data = await mazeApi.replanBosses(this.sessionId);
+        this.currentMap = this.selectedMap;
+        const nextIndex = this.extendPlayback(data.state);
+        if (Number.isInteger(nextIndex)) {
+          this.playIndex = Math.max(0, nextIndex - 1);
+        }
+        this.manualBossStreamStatus = data.state?.manual_boss_replan_required
+          ? "重新规划后仍超过总回合限制，已扣除复活价值，可再次重新规划"
+          : "已按已知 Boss 血量重新规划并挑战成功，请继续输入下一个 Boss 血量，或输入 -1 结束";
+        this.playing = true;
+        this.statusText = "playing";
+        this.scheduleStep();
+      } catch (err) {
+        this.statusText = err.message;
+        this.manualBossStreamStatus = err.message;
+      } finally {
+        this.busy = false;
+      }
+    },
     async runManualBossSequence() {
       if (!this.sessionId) {
         await this.startManualExploration();
         return;
       }
       if (this.state?.awaiting_boss_input) {
-        this.manualBossStreamStatus = "已到达 Boss 位置，请在左侧输入当前 Boss 血量";
-        this.statusText = "waiting boss input";
+        this.manualBossStreamStatus = this.state?.manual_boss_replan_required
+          ? "已知 Boss 序列超过总回合限制，请点击重新规划挑战已知 Boss"
+          : "已到达 Boss 位置，请在左侧输入当前 Boss 血量";
+        this.statusText = this.state?.manual_boss_replan_required ? "waiting replan" : "waiting boss input";
         return;
       }
       await this.continueManualExploration();
@@ -743,6 +779,7 @@ createApp({
         );
         this.sessionId = data.session_id;
         this.currentMap = this.selectedMap;
+        this.ensembleResult = data.summary?.ensemble || data.state?.ensemble_result || null;
         this.eventLog = [];
         this.loadPlayback(data.state);
         this.manualBossInputClosed = false;
@@ -789,8 +826,8 @@ createApp({
           return;
         }
         const latestBossEvent = data.state?.boss_events?.[data.state.boss_events.length - 1];
-        if (latestBossEvent?.manual_input_required_after_revive) {
-          this.manualBossStreamStatus = "当前 Boss 未打过，已扣除复活价值，请重新输入当前 Boss 血量，或输入 -1 结束";
+        if (latestBossEvent?.manual_replan_required_after_revive || data.state?.manual_boss_replan_required) {
+          this.manualBossStreamStatus = "已输入 Boss 的累计战斗回合超过限制，已扣除复活价值，请重新规划挑战已知 Boss";
         } else {
           this.manualBossStreamStatus = data.state?.awaiting_boss_input
             ? "当前 Boss 已处理，请继续输入下一个 Boss 血量，或输入 -1 结束"
