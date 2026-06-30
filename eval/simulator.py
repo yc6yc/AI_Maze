@@ -79,6 +79,7 @@ class LocalSimulator:
         self.pending_boss_pos: Position | None = None
         self.manual_boss_input_closed = False
         self.manual_boss_replan_required = False
+        self.manual_boss_step_pending = False
         self.min_rounds = int(data.get("minRouds", 20))
         self.coin_consumption = int(data.get("CoinConsumption", 0))
         self.boss_handler = boss_handler
@@ -120,22 +121,29 @@ class LocalSimulator:
 
         self.last_boss_event = None
         self.ctx.last_event = None
-        self.ctx.step_count += 1
-        self.ctx.player.rounds += 1
         action = action or Action()
         manual_boss_target = self._manual_boss_input_target(action)
-        combat_target = None if manual_boss_target is not None else self._combat_target(action)
+        manual_boss_move_target = None if manual_boss_target is not None else self._manual_boss_move_target(action)
+        count_step_now = manual_boss_target is None and manual_boss_move_target is None
+        if count_step_now:
+            self.ctx.step_count += 1
+            self.ctx.player.rounds += 1
+        combat_target = None if manual_boss_target is not None or manual_boss_move_target is not None else self._combat_target(action)
         if manual_boss_target is not None:
             self.ctx.player.pos = manual_boss_target
             self._request_manual_boss_input(manual_boss_target)
             self._reveal_fov(manual_boss_target)
+        elif manual_boss_move_target is not None:
+            self.ctx.player.pos = manual_boss_move_target
+            self._request_manual_boss_input(manual_boss_move_target)
+            self._reveal_fov(manual_boss_move_target)
         elif combat_target is not None:
             self._handle_boss(combat_target)
             self._reveal_fov(self.ctx.player.pos)
         else:
             self._apply_move(action.normalized_move())
 
-        if self.ctx.step_count >= self.max_steps and not self.ctx.done:
+        if count_step_now and self.ctx.step_count >= self.max_steps and not self.ctx.done:
             self.ctx.done = True
             self.ctx.result = "timeout"
             self.ctx.last_event = {"type": "timeout", "message": "maximum steps reached"}
@@ -244,6 +252,10 @@ class LocalSimulator:
         pos = self.pending_boss_pos
         self.awaiting_boss_input = False
         self.manual_boss_input_closed = True
+        if self.manual_boss_step_pending:
+            self.ctx.step_count += 1
+            self.ctx.player.rounds += 1
+            self.manual_boss_step_pending = False
         self.ctx.maze.defeated_bosses.add(pos)
         r, c = pos
         if self.ground_truth[r][c] == "B":
@@ -646,8 +658,23 @@ class LocalSimulator:
                 return pos
         return None
 
+    def _manual_boss_move_target(self, action: Action) -> Position | None:
+        if self.boss_health_source != "manual" or self.awaiting_boss_input:
+            return None
+        move = action.normalized_move()
+        if move == Move.STAY.value:
+            return None
+        dr, dc = move_to_delta(move)
+        r, c = self.ctx.player.pos
+        target = (r + dr, c + dc)
+        tr, tc = target
+        if 0 <= tr < self.rows and 0 <= tc < self.cols and self.ground_truth[tr][tc] == "B":
+            return target
+        return None
+
     def _request_manual_boss_input(self, pos: Position) -> None:
         self.awaiting_boss_input = True
+        self.manual_boss_step_pending = True
         self.manual_boss_input_closed = False
         self.pending_boss_pos = pos
         self.ctx.last_event = {

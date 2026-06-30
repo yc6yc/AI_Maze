@@ -281,6 +281,32 @@ def test_manual_finish_input_clears_current_b_and_allows_maze_to_continue() -> N
     assert state["result"] == "win"
 
 
+def test_manual_boss_steps_are_counted_only_when_input_is_finished() -> None:
+    data = {
+        "maze": [["#", "#", "#", "#", "#"], ["#", "S", "B", "E", "#"], ["#", "#", "#", "#", "#"]],
+        "PlayerSkills": [[50, 0]],
+        "minRouds": 4,
+        "CoinConsumption": 0,
+    }
+    sim = LocalSimulator(data, boss_source="manual")
+
+    state = sim.step(Action(move="RIGHT"))
+    assert state["awaiting_boss_input"] is True
+    assert state["step"] == 0
+
+    state = sim.submit_manual_boss_health(20)
+    assert state["boss_events"][-1]["result"] == "win"
+    assert state["step"] == 0
+
+    state = sim.submit_manual_boss_health(30)
+    assert state["boss_events"][-1]["result"] == "win"
+    assert state["step"] == 0
+
+    state = sim.finish_manual_boss_input()
+    assert state["awaiting_boss_input"] is False
+    assert state["step"] == 1
+
+
 def test_manual_boss_healths_are_read_in_live_input_order() -> None:
     data = {
         "maze": [["#", "#", "#", "#", "#", "#"], ["#", "S", "B", "B", "E", "#"], ["#", "#", "#", "#", "#", "#"]],
