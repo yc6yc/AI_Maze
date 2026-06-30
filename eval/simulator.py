@@ -374,7 +374,8 @@ class LocalSimulator:
 
                 value_after, actual_cost = self._consume_revive_value(value_before)
                 self.ctx.player.coins = value_after
-                can_revive = self.coin_consumption > 0 and value_after > 0
+                required_revive_cost = max(self.coin_consumption, 0)
+                can_revive = required_revive_cost > 0 and actual_cost >= required_revive_cost
                 manual_replan_wait = self.boss_health_source == "manual" and can_revive
                 cooldowns_after_revive = [0 for _skill in self.ctx.player.skills] if can_revive else None
                 known_boss_healths_after_revive = (
@@ -389,13 +390,13 @@ class LocalSimulator:
                     **base_event,
                     "revived": can_revive,
                     "revive_cost": actual_cost,
-                    "required_revive_cost": max(self.coin_consumption, 0),
+                    "required_revive_cost": required_revive_cost,
                     "coins_delta": value_after - value_before,
                     "value_delta": value_after - value_before,
                     "revive": {
                         "used": can_revive,
                         "cost": actual_cost,
-                        "required_cost": max(self.coin_consumption, 0),
+                        "required_cost": required_revive_cost,
                         "coins_before": value_before,
                         "coins_after": value_after,
                         "value_before": value_before,
