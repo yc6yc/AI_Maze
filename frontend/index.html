@@ -79,11 +79,6 @@
             <span class="status-pill accent">{{ ensembleResult.selected_agent }}</span>
             <strong>{{ formatScore(ensembleResult.selected_score) }}</strong>
             <small>{{ ensembleResult.selected_result }} · VALUE {{ ensembleResult.selected_total_value }} · STEP {{ ensembleResult.selected_total_steps }}</small>
-            <div class="ensemble-candidates">
-              <span v-for="candidate in ensembleResult.candidates" :key="candidate.agent">
-                {{ candidate.agent }} · {{ candidate.error ? "ERR" : formatScore(candidate.score) }}
-              </span>
-            </div>
           </div>
 
           <div class="panel-section">
@@ -223,6 +218,6 @@
 
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="/static/js/api.js?v=20260630-02"></script>
-    <script src="/static/js/app.js?v=20260630-04"></script>
+    <script src="/static/js/app.js?v=20260630-05"></script>
   </body>
 </html>
