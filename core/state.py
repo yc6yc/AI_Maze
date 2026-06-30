@@ -32,7 +32,7 @@ CARDINAL_MOVES: tuple[str, ...] = (
     Move.RIGHT.value,
 )
 
-WALKABLE_CELLS = {" ", "S", "E", "B", "T", "C", "G", "L"}
+WALKABLE_CELLS = {" ", ".", "S", "E", "B", "T", "C", "G", "L"}
 COIN_CELLS = {"C", "G"}
 
 
