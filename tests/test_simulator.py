@@ -93,7 +93,7 @@ def test_boss_battle_uses_cooldown_aware_skill_plan() -> None:
     assert battle["total_damage"] == 200
 
 
-def test_revealed_boss_sequence_planner_saves_big_skill_for_later_boss() -> None:
+def test_current_boss_planner_conserves_big_skill_to_avoid_revive() -> None:
     data = {
         "maze": [["#", "#", "#", "#", "#"], ["#", "S", "B", "E", "#"], ["#", "#", "#", "#", "#"]],
         "B": [1, 100],
@@ -105,19 +105,48 @@ def test_revealed_boss_sequence_planner_saves_big_skill_for_later_boss() -> None
     sim.ctx.player.coins = 10
 
     state = sim.step(Action(move="RIGHT"))
-    first, second, third, fourth = state["boss_events"]
+    first, second = state["boss_events"]
     assert first["planning_mode"] == "current_boss"
-    assert first["rounds"][0]["skill_index"] == 0
-    assert second["result"] == "lose"
-    assert second["revived"] is True
-
-    assert third["planning_mode"] == "known_sequence"
-    assert third["planned_boss_orders"] == [1, 2]
-    assert third["planned_boss_healths"] == [1, 100]
-    assert third["rounds"][0]["skill_index"] == 1
-    assert fourth["planning_mode"] == "known_sequence"
-    assert fourth["rounds"][0]["skill_index"] == 0
+    assert first["planning_strategy"] == "conservative_current_boss"
+    assert first["rounds"][0]["skill_index"] == 1
+    assert second["planning_mode"] == "current_boss"
+    assert second["rounds"][0]["skill_index"] == 0
+    assert all(event["revived"] is False for event in state["boss_events"])
     assert state["boss_defeated"] is True
+
+
+def test_conservative_current_boss_planner_prefers_exact_low_cost_skill() -> None:
+    battle = simulate_boss_battle([Skill(12, 4), Skill(5, 2), Skill(2, 0)], health=14, min_rounds=15, conserve_skills=True)
+
+    assert battle["result"] == "win"
+    assert [round_info["skill_index"] for round_info in battle["rounds"]] == [0, 2]
+
+
+def test_wang_zice_manual_boss_sequence_avoids_revive_with_shortest_conservative_plan() -> None:
+    data = {
+        "maze": [["#", "#", "#"], ["#", "S", "B"], ["#", "#", "E"]],
+        "PlayerSkills": [
+            [35, 0], [245, 8], [280, 1], [56, 1], [55, 1], [54, 1], [52, 1], [49, 1], [47, 1],
+            [45, 1], [43, 1], [41, 1], [39, 1], [37, 1], [34, 2], [33, 4], [32, 3], [31, 5],
+            [30, 7], [29, 6], [28, 8], [27, 2], [26, 5], [25, 3], [24, 6], [23, 4], [22, 7],
+            [21, 2], [20, 8], [19, 5],
+        ],
+        "minRouds": 15,
+        "CoinConsumption": 150,
+    }
+    sim = LocalSimulator(data, boss_source="manual")
+    sim.ctx.player.coins = 1000
+
+    state = sim.step(Action(move="RIGHT"))
+    assert state["awaiting_boss_input"] is True
+
+    for health in [220, 710, 1010, 420, 220]:
+        state = sim.submit_manual_boss_health(health)
+
+    assert state["manual_boss_replan_required"] is False
+    assert state["defeated_boss_count"] == 5
+    assert state["boss_events"][-1]["total_rounds_used"] == 15
+    assert all(event["revived"] is False for event in state["boss_events"])
 
 
 def test_known_boss_sequence_dp_avoids_greedy_overkill() -> None:

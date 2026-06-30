@@ -27,6 +27,7 @@ COIN_VALUE = 50
 TRAP_DAMAGE = 30
 VIEW_RADIUS = 1
 BOSS_SEQUENCE_STATE_LIMIT = 50000
+BOSS_CONSERVE_EXTRA_ROUNDS = 0
 
 
 class LocalSimulator:
@@ -493,6 +494,7 @@ class LocalSimulator:
             "skills": battle["skills"],
             "final_cooldowns": battle.get("final_cooldowns", []),
             "planning_mode": battle.get("planning_mode", "current_boss"),
+            "planning_strategy": battle.get("planning_strategy", battle.get("planning_mode", "current_boss")),
             "planned_boss_orders": battle.get("planned_boss_orders", [health_idx + 1]),
             "planned_boss_healths": battle.get("planned_boss_healths", [health]),
             "planned_sequence_result": battle.get("planned_sequence_result", battle["result"]),
@@ -535,8 +537,9 @@ class LocalSimulator:
     def _boss_battle_trace(self, health_idx: int, round_limit: int) -> dict[str, Any]:
         health = self.boss_health_sequence[health_idx]
         if not self.all_boss_healths_revealed:
-            battle = simulate_boss_battle(self.ctx.player.skills, health, round_limit)
+            battle = simulate_boss_battle(self.ctx.player.skills, health, round_limit, conserve_skills=True)
             battle["planning_mode"] = "current_boss"
+            battle["planning_strategy"] = "conservative_current_boss"
             battle["planned_boss_orders"] = [health_idx + 1]
             battle["planned_boss_healths"] = [health]
             battle["planned_sequence_result"] = battle["result"]
@@ -795,7 +798,13 @@ def normalize_boss_healths(raw: Any) -> list[int]:
     return result
 
 
-def simulate_boss_battle(skills: list[Skill], health: int, min_rounds: int) -> dict[str, Any]:
+def simulate_boss_battle(
+    skills: list[Skill],
+    health: int,
+    min_rounds: int,
+    *,
+    conserve_skills: bool = False,
+) -> dict[str, Any]:
     skill_states = [skill.clone() for skill in skills]
     skill_defs = [
         {
@@ -806,7 +815,7 @@ def simulate_boss_battle(skills: list[Skill], health: int, min_rounds: int) -> d
         }
         for idx, skill in enumerate(skill_states)
     ]
-    plan = _plan_boss_battle(skill_states, health, min_rounds)
+    plan = _plan_boss_battle(skill_states, health, min_rounds, conserve_skills=conserve_skills)
     rounds, remaining, final_cooldowns = _build_boss_rounds(skill_states, health, plan)
 
     return {
@@ -845,11 +854,23 @@ def _simulate_boss_battle_with_plan(skills: list[Skill], health: int, plan: list
     }
 
 
-def _plan_boss_battle(skills: list[Skill], health: int, min_rounds: int) -> list[int | None]:
-    return _plan_boss_sequence(skills, [health], min_rounds)
+def _plan_boss_battle(
+    skills: list[Skill],
+    health: int,
+    min_rounds: int,
+    *,
+    conserve_skills: bool = False,
+) -> list[int | None]:
+    return _plan_boss_sequence(skills, [health], min_rounds, conserve_skills=conserve_skills)
 
 
-def _plan_boss_sequence(skills: list[Skill], healths: list[int], min_rounds: int) -> list[int | None]:
+def _plan_boss_sequence(
+    skills: list[Skill],
+    healths: list[int],
+    min_rounds: int,
+    *,
+    conserve_skills: bool = False,
+) -> list[int | None]:
     max_rounds = max(min_rounds, 0)
     if not healths or max_rounds <= 0:
         return []
@@ -862,6 +883,8 @@ def _plan_boss_sequence(skills: list[Skill], healths: list[int], min_rounds: int
         (0, initial_cooldowns): (healths[0], [])
     }
     best_partial: tuple[int, int, list[int | None]] = (0, healths[0], [])
+    conservative_winning_plans: list[list[int | None]] = []
+    shortest_win_rounds: int | None = None
 
     for _round_no in range(1, max_rounds + 1):
         next_states: dict[tuple[int, tuple[int, ...]], tuple[int, list[int | None]]] = {}
@@ -888,12 +911,22 @@ def _plan_boss_sequence(skills: list[Skill], healths: list[int], min_rounds: int
                 _store_boss_dp_state(next_states, key, new_remaining, new_plan)
 
         if winning_plans:
-            return min(winning_plans, key=_plan_tiebreak)
+            if not conserve_skills:
+                return min(winning_plans, key=_plan_tiebreak)
+            shortest_win_rounds = shortest_win_rounds or len(winning_plans[0])
+            conservative_winning_plans.extend(winning_plans)
+            if _round_no >= min(max_rounds, shortest_win_rounds + BOSS_CONSERVE_EXTRA_ROUNDS):
+                return min(
+                    conservative_winning_plans,
+                    key=lambda plan: _conservative_plan_tiebreak(skills, healths, plan),
+                )
         if len(next_states) > BOSS_SEQUENCE_STATE_LIMIT:
             next_states = _trim_boss_sequence_states(next_states)
         dp = next_states
         if not dp:
             break
+    if conservative_winning_plans:
+        return min(conservative_winning_plans, key=lambda plan: _conservative_plan_tiebreak(skills, healths, plan))
     return best_partial[2]
 
 
@@ -951,6 +984,29 @@ def _plan_tiebreak(plan: list[int | None]) -> tuple[int, int, tuple[int, ...]]:
     waits = sum(1 for item in plan if item is None)
     skill_order = tuple(9999 if item is None else item for item in plan)
     return (waits, len(plan), skill_order)
+
+
+def _conservative_plan_tiebreak(
+    skills: list[Skill],
+    healths: list[int],
+    plan: list[int | None],
+) -> tuple[float, int, int, int, float, tuple[int, ...]]:
+    preview = _preview_boss_sequence_plan(skills, healths, plan)
+    skill_pressure = 0.0
+    for choice in plan:
+        if choice is None:
+            continue
+        skill = skills[choice]
+        skill_pressure += skill.damage * (skill.cooldown + 1)
+    waits = sum(1 for choice in plan if choice is None)
+    total_health = sum(healths)
+    overkill = max(sum(skills[choice].damage for choice in plan if choice is not None) - total_health, 0)
+    final_cooldown_pressure = sum(
+        cooldown * max(skills[idx].damage, 1)
+        for idx, cooldown in enumerate(preview.get("final_cooldowns", []))
+    )
+    skill_order = tuple(9999 if item is None else item for item in plan)
+    return (skill_pressure, overkill, len(plan), waits, final_cooldown_pressure, skill_order)
 
 
 def _trim_boss_sequence_states(
