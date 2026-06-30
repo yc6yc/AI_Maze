@@ -444,6 +444,58 @@ def test_failed_boss_attempts_auto_revive_until_value_exhausted() -> None:
     assert state["result"] == "lose"
 
 
+def test_boss_revive_allowed_when_value_exactly_matches_cost() -> None:
+    data = {
+        "maze": [["#", "#", "#", "#"], ["#", "S", "B", "E"], ["#", "#", "#", "#"]],
+        "B": [100],
+        "PlayerSkills": [[10, 0]],
+        "minRouds": 1,
+        "CoinConsumption": 15,
+    }
+    sim = LocalSimulator(data)
+    sim.ctx.player.coins = 15
+
+    state = sim.step(Action(move="RIGHT"))
+    first, second = state["boss_events"]
+
+    assert first["result"] == "lose"
+    assert first["coins_before"] == 15
+    assert first["coins_after"] == 0
+    assert first["revived"] is True
+    assert first["revive_cost"] == 15
+    assert second["attempt"] == 2
+    assert second["coins_before"] == 0
+    assert second["revived"] is False
+    assert state["done"] is True
+    assert state["result"] == "lose"
+
+
+def test_manual_boss_replan_allowed_when_value_exactly_matches_cost() -> None:
+    data = {
+        "maze": [["#", "#", "#", "#", "#"], ["#", "S", "B", "E", "#"], ["#", "#", "#", "#", "#"]],
+        "PlayerSkills": [[10, 0]],
+        "minRouds": 1,
+        "CoinConsumption": 15,
+    }
+    sim = LocalSimulator(data, boss_source="manual")
+    sim.ctx.player.coins = 15
+
+    state = sim.step(Action(move="RIGHT"))
+    assert state["awaiting_boss_input"] is True
+
+    state = sim.submit_manual_boss_health(20)
+    failed = state["boss_events"][-1]
+
+    assert failed["result"] == "lose"
+    assert failed["value_before"] == 15
+    assert failed["value_after"] == 0
+    assert failed["revived"] is True
+    assert failed["manual_replan_required_after_revive"] is True
+    assert state["awaiting_boss_input"] is True
+    assert state["manual_boss_replan_required"] is True
+    assert state["value"] == 0
+
+
 def test_boss_revive_restarts_sequence_from_first_boss_until_success() -> None:
     data = {
         "maze": [["#", "#", "#", "#", "#"], ["#", "S", "B", "E", "#"], ["#", "#", "#", "#", "#"]],
