@@ -186,8 +186,15 @@ createApp({
       bossVideoTitle: "BOSS ENCOUNTER",
       bossVideoTimer: null,
       bossVideoQueue: [],
-      bossVideoSpeed: 1,
-      bossVideoSpeedOptions: [1, 2, 2.5, 3],
+      bossVideoSpeedKey: "1",
+      bossVideoSpeedOptions: [
+        { key: "1", label: "1x", rate: 1 },
+        { key: "2", label: "2x", rate: 2 },
+        { key: "2.5", label: "2.5x", rate: 2.5 },
+        { key: "3", label: "3x", rate: 3 },
+        { key: "6", label: "6x", rate: 6 },
+        { key: "adaptive", label: "原来的速度", rate: null },
+      ],
       bossVideoPlaybackRate: 1,
       bossVideoTargetMs: 0,
       activeBgm: "",
@@ -625,9 +632,9 @@ createApp({
       this.clearBossVideoTimer();
       this.playNextBossVideo();
     },
-    setBossVideoSpeed(rate) {
-      const nextRate = Number(rate);
-      this.bossVideoSpeed = this.bossVideoSpeedOptions.includes(nextRate) ? nextRate : 1;
+    setBossVideoSpeed(key) {
+      const nextKey = String(key);
+      this.bossVideoSpeedKey = this.bossVideoSpeedOptions.some((option) => option.key === nextKey) ? nextKey : "1";
       this.applyBossVideoPlayback(false);
     },
     applyBossVideoPlayback(resetTimer = false) {
@@ -636,16 +643,22 @@ createApp({
         return;
       }
       const targetMs = this.bossVideoTargetMs || 3000;
-      const rate = Math.min(3, Math.max(1, Number(this.bossVideoSpeed) || 1));
+      const selectedSpeed = this.bossVideoSpeedOptions.find((option) => option.key === this.bossVideoSpeedKey) || this.bossVideoSpeedOptions[0];
+      const durationMs = Number.isFinite(video.duration) && video.duration > 0 ? video.duration * 1000 : targetMs;
+      const rate = selectedSpeed.key === "adaptive"
+        ? 16
+        : Math.min(6, Math.max(1, Number(selectedSpeed.rate) || 1));
       video.playbackRate = rate;
       this.bossVideoPlaybackRate = rate;
       if (!resetTimer && !this.bossOverlay) {
         return;
       }
       this.clearBossVideoTimer();
-      const remainingMs = Number.isFinite(video.duration) && video.duration > 0
-        ? Math.max(600, ((video.duration - video.currentTime) * 1000) / Math.max(rate, 0.25))
-        : targetMs;
+      const remainingMs = selectedSpeed.key === "adaptive"
+        ? 260
+        : Number.isFinite(video.duration) && video.duration > 0
+          ? Math.max(600, ((video.duration - video.currentTime) * 1000) / Math.max(rate, 0.25))
+          : targetMs;
       this.bossVideoTimer = window.setTimeout(() => {
         this.finishBossVideo();
       }, remainingMs + 220);

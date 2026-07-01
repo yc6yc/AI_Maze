@@ -376,7 +376,7 @@ select:hover { border-color: rgba(0,229,255,0.35); color: var(--cyan); text-shad
 .boss-video-title { min-width: 0; color: var(--magenta); text-shadow: 0 0 8px var(--magenta-glow); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .boss-video-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; }
 .boss-speed-group { display: flex; align-items: center; overflow: hidden; border: 1px solid rgba(0,229,255,0.28); border-radius: 6px; background: rgba(0,0,0,0.34); }
-.boss-speed-btn { min-width: 42px; min-height: 30px; padding: 0 8px; border: 0; border-right: 1px solid rgba(0,229,255,0.18); background: transparent; color: var(--cyan); cursor: pointer; font-size: 11px; letter-spacing: 0.04em; text-shadow: 0 0 6px var(--cyan-dim); }
+.boss-speed-btn { min-width: 42px; min-height: 30px; padding: 0 9px; border: 0; border-right: 1px solid rgba(0,229,255,0.18); background: transparent; color: var(--cyan); cursor: pointer; font-size: 11px; letter-spacing: 0.04em; white-space: nowrap; text-shadow: 0 0 6px var(--cyan-dim); }
 .boss-speed-btn:last-child { border-right: 0; }
 .boss-speed-btn:hover { background: rgba(0,229,255,0.1); }
 .boss-speed-btn.active { background: rgba(0,229,255,0.18); color: #f5ffff; }
