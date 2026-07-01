@@ -1,8 +1,14 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from agents.composite_agent import make_agent
 from core.state import Action, Skill
 from eval.simulator import LocalSimulator, simulate_boss_battle
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_simulator_reveals_initial_fov_and_collects_coin() -> None:
@@ -147,6 +153,29 @@ def test_wang_zice_manual_boss_sequence_avoids_revive_with_shortest_conservative
     assert state["defeated_boss_count"] == 5
     assert state["boss_events"][-1]["total_rounds_used"] == 15
     assert all(event["revived"] is False for event in state["boss_events"])
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "1best_maze_design_汪子策.json",
+        "2best_maze_design_张志南.json",
+        "6best_maze_design_郑源.json",
+        "7best_maze_design_于小航.json",
+    ],
+)
+def test_high_revive_cost_maps_prefer_no_revive_current_boss_plans(filename: str) -> None:
+    data = json.loads((ROOT / "map" / filename).read_text(encoding="utf-8"))
+    data["maze"] = [["#", "#", "#"], ["#", "S", "B"], ["#", "#", "E"]]
+    sim = LocalSimulator(data)
+    sim.ctx.player.coins = 9999
+
+    state = sim.step(Action(move="RIGHT"))
+
+    assert state["defeated_boss_count"] == len(data["B"])
+    assert all(event["planning_mode"] == "current_boss" for event in state["boss_events"])
+    assert all(event["revived"] is False for event in state["boss_events"])
+    assert state["boss_events"][-1]["total_rounds_used"] <= data["minRouds"]
 
 
 def test_known_boss_sequence_dp_avoids_greedy_overkill() -> None:
