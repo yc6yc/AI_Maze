@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI Maze Visualizer</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20260630-02" />
+    <link rel="stylesheet" href="/static/css/style.css?v=20260701-02" />
   </head>
   <body>
     <div id="app" class="app-shell" :class="{ 'login-mode': !loggedIn }" v-cloak>
@@ -147,8 +147,22 @@
             <div v-if="bossOverlay" class="boss-video-overlay">
               <video ref="bossVideo" class="boss-video" :src="bossVideoSrc" muted playsinline preload="metadata"></video>
               <div class="boss-video-hud">
-                <span>{{ bossVideoTitle }}</span>
-                <strong>{{ bossDetail?.total_damage ?? 0 }} / {{ bossDetail?.initial_health ?? 0 }}</strong>
+                <span class="boss-video-title">{{ bossVideoTitle }}</span>
+                <div class="boss-video-actions">
+                  <div class="boss-speed-group" aria-label="Boss 视频倍速">
+                    <button
+                      v-for="rate in bossVideoSpeedOptions"
+                      :key="rate"
+                      type="button"
+                      class="boss-speed-btn"
+                      :class="{ active: bossVideoSpeed === rate }"
+                      @click.stop="setBossVideoSpeed(rate)"
+                    >
+                      {{ rate }}x
+                    </button>
+                  </div>
+                  <strong>{{ bossDetail?.total_damage ?? 0 }} / {{ bossDetail?.initial_health ?? 0 }}</strong>
+                </div>
               </div>
             </div>
           </div>
@@ -217,7 +231,7 @@
     </div>
 
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-    <script src="/static/js/api.js?v=20260630-02"></script>
-    <script src="/static/js/app.js?v=20260630-05"></script>
+    <script src="/static/js/api.js?v=20260701-02"></script>
+    <script src="/static/js/app.js?v=20260701-02"></script>
   </body>
 </html>

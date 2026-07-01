@@ -186,6 +186,10 @@ createApp({
       bossVideoTitle: "BOSS ENCOUNTER",
       bossVideoTimer: null,
       bossVideoQueue: [],
+      bossVideoSpeed: 1,
+      bossVideoSpeedOptions: [1, 2, 2.5, 3],
+      bossVideoPlaybackRate: 1,
+      bossVideoTargetMs: 0,
       activeBgm: "",
       ensembleResult: null,
     };
@@ -472,6 +476,8 @@ createApp({
       this.bossOverlay = false;
       this.bossVideoSrc = "";
       this.bossVideoQueue = [];
+      this.bossVideoTargetMs = 0;
+      this.bossVideoPlaybackRate = 1;
       this.ensembleResult = null;
       this.statusText = "ready";
       this.render();
@@ -600,13 +606,13 @@ createApp({
       }
       const rounds = event.rounds?.length || event.rounds_used || 1;
       const targetMs = Math.max(1800, Math.min(9000, 800 + rounds * Math.max(this.speed, 80) * 1.8));
+      this.bossVideoTargetMs = targetMs;
       const close = () => {
-        this.playNextBossVideo();
+        this.finishBossVideo();
       };
       const configure = () => {
-        const durationMs = Number.isFinite(video.duration) && video.duration > 0 ? video.duration * 1000 : targetMs;
-        video.playbackRate = Math.min(4, Math.max(0.25, durationMs / targetMs));
         video.currentTime = 0;
+        this.applyBossVideoPlayback(true);
         video.play().catch(() => {});
       };
       video.onloadedmetadata = configure;
@@ -614,7 +620,35 @@ createApp({
       if (video.readyState >= 1) {
         configure();
       }
-      this.bossVideoTimer = window.setTimeout(close, targetMs + 220);
+    },
+    finishBossVideo() {
+      this.clearBossVideoTimer();
+      this.playNextBossVideo();
+    },
+    setBossVideoSpeed(rate) {
+      const nextRate = Number(rate);
+      this.bossVideoSpeed = this.bossVideoSpeedOptions.includes(nextRate) ? nextRate : 1;
+      this.applyBossVideoPlayback(false);
+    },
+    applyBossVideoPlayback(resetTimer = false) {
+      const video = this.$refs.bossVideo;
+      if (!video) {
+        return;
+      }
+      const targetMs = this.bossVideoTargetMs || 3000;
+      const rate = Math.min(3, Math.max(1, Number(this.bossVideoSpeed) || 1));
+      video.playbackRate = rate;
+      this.bossVideoPlaybackRate = rate;
+      if (!resetTimer && !this.bossOverlay) {
+        return;
+      }
+      this.clearBossVideoTimer();
+      const remainingMs = Number.isFinite(video.duration) && video.duration > 0
+        ? Math.max(600, ((video.duration - video.currentTime) * 1000) / Math.max(rate, 0.25))
+        : targetMs;
+      this.bossVideoTimer = window.setTimeout(() => {
+        this.finishBossVideo();
+      }, remainingMs + 220);
     },
     formatEventMessage(event) {
       if (event.type === "boss") {

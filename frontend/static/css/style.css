@@ -373,7 +373,13 @@ select:hover { border-color: rgba(0,229,255,0.35); color: var(--cyan); text-shad
 .boss-video-overlay { position: absolute; inset: 0; z-index: 5; display: grid; place-items: center; background: rgba(3,3,8,0.86); }
 .boss-video { width: 100%; height: 100%; object-fit: cover; filter: contrast(1.08) saturate(1.1); }
 .boss-video-hud { position: absolute; left: 18px; right: 18px; bottom: 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid rgba(255,45,149,0.28); border-radius: 8px; background: rgba(5,4,10,0.74); backdrop-filter: blur(12px); }
-.boss-video-hud span { color: var(--magenta); text-shadow: 0 0 8px var(--magenta-glow); }
+.boss-video-title { min-width: 0; color: var(--magenta); text-shadow: 0 0 8px var(--magenta-glow); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.boss-video-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; }
+.boss-speed-group { display: flex; align-items: center; overflow: hidden; border: 1px solid rgba(0,229,255,0.28); border-radius: 6px; background: rgba(0,0,0,0.34); }
+.boss-speed-btn { min-width: 42px; min-height: 30px; padding: 0 8px; border: 0; border-right: 1px solid rgba(0,229,255,0.18); background: transparent; color: var(--cyan); cursor: pointer; font-size: 11px; letter-spacing: 0.04em; text-shadow: 0 0 6px var(--cyan-dim); }
+.boss-speed-btn:last-child { border-right: 0; }
+.boss-speed-btn:hover { background: rgba(0,229,255,0.1); }
+.boss-speed-btn.active { background: rgba(0,229,255,0.18); color: #f5ffff; }
 .boss-video-hud strong { color: var(--gold); }
 
 .event-list { min-height: 130px; max-height: 28vh; margin: 0; padding: 0; list-style: none; overflow: auto; }
