@@ -918,7 +918,7 @@ def _plan_boss_sequence(
             if _round_no >= min(max_rounds, shortest_win_rounds + BOSS_CONSERVE_EXTRA_ROUNDS):
                 return min(
                     conservative_winning_plans,
-                    key=lambda plan: _conservative_plan_tiebreak(skills, healths, plan),
+                    key=lambda plan: _conservative_plan_tiebreak(skills, healths, plan, max_rounds),
                 )
         if len(next_states) > BOSS_SEQUENCE_STATE_LIMIT:
             next_states = _trim_boss_sequence_states(next_states)
@@ -926,7 +926,10 @@ def _plan_boss_sequence(
         if not dp:
             break
     if conservative_winning_plans:
-        return min(conservative_winning_plans, key=lambda plan: _conservative_plan_tiebreak(skills, healths, plan))
+        return min(
+            conservative_winning_plans,
+            key=lambda plan: _conservative_plan_tiebreak(skills, healths, plan, max_rounds),
+        )
     return best_partial[2]
 
 
@@ -990,23 +993,70 @@ def _conservative_plan_tiebreak(
     skills: list[Skill],
     healths: list[int],
     plan: list[int | None],
-) -> tuple[float, int, int, int, float, tuple[int, ...]]:
+    max_rounds: int,
+) -> tuple[Any, ...]:
     preview = _preview_boss_sequence_plan(skills, healths, plan)
-    skill_pressure = 0.0
+    efficient_skill_pressure = 0.0
+    long_cooldown_pressure = 0.0
     for choice in plan:
         if choice is None:
             continue
         skill = skills[choice]
-        skill_pressure += skill.damage * (skill.cooldown + 1)
+        efficient_skill_pressure += skill.damage / max(skill.cooldown + 1, 1)
+        long_cooldown_pressure += skill.damage * (skill.cooldown + 1)
     waits = sum(1 for choice in plan if choice is None)
     total_health = sum(healths)
     overkill = max(sum(skills[choice].damage for choice in plan if choice is not None) - total_health, 0)
+    final_cooldowns = preview.get("final_cooldowns", [])
+    future_damage_capacity = _estimate_future_damage_capacity(
+        skills,
+        tuple(int(cooldown) for cooldown in final_cooldowns),
+        max_rounds - len(plan),
+    )
     final_cooldown_pressure = sum(
         cooldown * max(skills[idx].damage, 1)
-        for idx, cooldown in enumerate(preview.get("final_cooldowns", []))
+        for idx, cooldown in enumerate(final_cooldowns)
     )
     skill_order = tuple(9999 if item is None else item for item in plan)
-    return (skill_pressure, overkill, len(plan), waits, final_cooldown_pressure, skill_order)
+    exact_kill_penalty = 0 if overkill == 0 else 1
+    return (
+        exact_kill_penalty,
+        -future_damage_capacity,
+        efficient_skill_pressure,
+        overkill,
+        len(plan),
+        final_cooldown_pressure,
+        long_cooldown_pressure,
+        waits,
+        skill_order,
+    )
+
+
+def _estimate_future_damage_capacity(
+    skills: list[Skill],
+    cooldowns: tuple[int, ...],
+    rounds: int,
+) -> int:
+    """Greedy, health-agnostic estimate of how much damage the CD state can still produce."""
+    current_cooldowns = tuple(max(int(cooldown), 0) for cooldown in cooldowns)
+    total_damage = 0
+    for _round_no in range(max(rounds, 0)):
+        ready = [idx for idx, cooldown in enumerate(current_cooldowns) if cooldown <= 0]
+        if ready:
+            choice = max(
+                ready,
+                key=lambda idx: (
+                    skills[idx].damage,
+                    -skills[idx].cooldown,
+                    -idx,
+                ),
+            )
+        else:
+            choice = None
+        if choice is not None:
+            total_damage += skills[choice].damage
+        current_cooldowns = _advance_boss_cooldowns(skills, current_cooldowns, choice)
+    return total_damage
 
 
 def _trim_boss_sequence_states(
